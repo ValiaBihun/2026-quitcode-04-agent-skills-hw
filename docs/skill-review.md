@@ -75,12 +75,14 @@
 
 ## 5. Чи правдивий зміст для нашого стеку
 
-_Заповнюється після рев'ю застосунку зі скілом (Task A, крок 5): 2–3 поради, які застосовуємо,
-звірені з `node_modules/next/dist/docs/` (Next.js 16.3.5)._
+Звірено з `node_modules/next/dist/docs/` (Next.js 16.3.5):
 
 | Порада скіла (id) | Що каже скіл | Що каже документація нашої версії | Висновок |
 |---|---|---|---|
-| | | | |
+| `async-parallel` | Незалежні запити — через `Promise.all()`, а не послідовними `await` | `01-app/01-getting-started/06-fetching-data.md`, «Parallel data fetching»: layout і page рендеряться паралельно, але в межах компонента послідовні `await` блокують один одного; радить `Promise.all` (і `allSettled`, якщо потрібна стійкість до збою одного запиту) | Правдиво. Застосовано (`948412b`) |
+| `server-cache-react` | `React.cache()` для дедуплікації в межах запиту; аргументи порівнюються через `Object.is`, тож передавати примітиви, а не нові об'єкти | Той самий файл, «Reusing data with `React.cache`»: для запитів не через `fetch` (ORM, БД) — `React.cache`, область — один запит; `02-guides/authentication.md` показує `verifySession = cache(async () => { cookies() … })` — `cookies()` і `redirect()` усередині `cache()` допустимі | Правдиво. Застосовано (`f1684de`) |
+| `server-after-nonblocking` | Повільні побічні ефекти — в `after()` | `03-api-reference/04-functions/after.md`: `after` з `next/server` стабільний з v15.1.0 (Version History) | Правдиво; застосуємо разом із переробкою виклику n8n у Task D |
+| `bundle-barrel-imports` | Імпорт напряму, не з barrel-файлів; згадує `optimizePackageImports` | `03-api-reference/05-config/01-next-config-js/optimizePackageImports.md`: Next.js уже оптимізує імпорти з пакетів дефолтного списку (`recharts` і `lodash-es` там є), тож для них порада зайва; `lodash` (CommonJS) у списку немає | Частково застаріла: для `recharts` нічого робити не треба, для `lodash` — `lodash/debounce` |
 
 ## 6. Закріплення версії й коміт
 
