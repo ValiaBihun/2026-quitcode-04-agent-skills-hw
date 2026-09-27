@@ -261,6 +261,9 @@ TTFB 1.428993s, total 1.429588s
   Стара версія пропускала й справжній токен у такому файлі (перевірено: `N8N_WEBHOOK_TOKEN=real-token`
   з CRLF → C11 PASS до виправлення, FAIL після). Тепер скрипт нормалізує переноси рядків; заодно
   переписано два цикли, на які скаржився ESLint. Код прогонів A і B міряли вже виправленою версією.
+  Після рев'ю CodeRabbit (PR #8) — ще три коміти скілів: `cf97b0a` (скрипт: `файл:рядок` для
+  кожного FAIL, точніший C8, C7 приймає потокове читання тіла), `e34208f` (шаблони n8n), `e869ccc`
+  (патерн форми в `building-client-form`) — див. розділ «Після рев'ю CodeRabbit» наприкінці.
 
 `check-contract.mjs`: Node без залежностей (`node:fs`, `node:path`, `node:child_process`,
 `node:util`), 13 перевірок C1–C13 з PASS/FAIL, для FAIL — `файл:рядок`, код виходу 1 при FAIL
@@ -289,10 +292,10 @@ C8   PASS  Callback signature compared with crypto.timingSafeEqual, never === / 
 C9   PASS  Callback route checks x-n8n-timestamp and idempotency-key (n/a: no callback route found under app/**/route.*)
 C10  PASS  No export const runtime = 'edge'
 C11  FAIL  .env.example: contract keys present, secrets are change-me-..., base URL ends in /webhook
-       .env.example  N8N_WEBHOOK_BASE_URL is missing
-       .env.example  N8N_WEBHOOK_TOKEN is missing
-       .env.example  N8N_CALLBACK_SECRET is missing
-       .env.example  APP_BASE_URL is missing
+       .env.example:1  N8N_WEBHOOK_BASE_URL is missing
+       .env.example:1  N8N_WEBHOOK_TOKEN is missing
+       .env.example:1  N8N_CALLBACK_SECRET is missing
+       .env.example:1  APP_BASE_URL is missing
 C12  PASS  No request bodies or personal data in console.* of n8n-related files
 C13  FAIL  In "use server" files every n8n call runs inside after() — the user never waits for n8n
        app/actions.ts:54  fetch to n8n is awaited in the Server Action instead of inside after()
@@ -318,9 +321,9 @@ C3   PASS
 C4   FAIL  … components/quote-button.tsx:3  n8n call, but lib/n8n/client.ts does not exist
 C5   FAIL  … components/quote-button.tsx:3  fetch without signal/timeout
 C6   FAIL  … components/quote-button.tsx:3  headers missing: x-n8n-token, idempotency-key, x-correlation-id
-C7   FAIL  … app/api/n8n/cb/route.ts:4  request body parsed with .json() · raw body is never read (.text() / .arrayBuffer())
-C8   FAIL  … app/api/n8n/cb/route.ts  no crypto.timingSafeEqual · app/api/n8n/cb/route.ts:8  signature compared with ===/!==
-C9   FAIL  … header x-n8n-timestamp is never read · header idempotency-key is never read
+C7   FAIL  … app/api/n8n/cb/route.ts:4  request body parsed with .json() · app/api/n8n/cb/route.ts:3  raw body is never read (.text() / .arrayBuffer() / body.getReader())
+C8   FAIL  … app/api/n8n/cb/route.ts:3  no crypto.timingSafeEqual · app/api/n8n/cb/route.ts:8  signature compared with ===/!== (signature … expected)
+C9   FAIL  … app/api/n8n/cb/route.ts:3  header x-n8n-timestamp is never read · header idempotency-key is never read
 C10  FAIL  … app/api/n8n/cb/route.ts:2  edge runtime is deprecated in Next.js 16 and has no node:crypto
 C11  FAIL  … N8N_CALLBACK_SECRET is missing · APP_BASE_URL is missing · .env.example:2  N8N_WEBHOOK_TOKEN must be change-me-... (value not printed) · .env.example:1  N8N_WEBHOOK_BASE_URL must end in /webhook
 C12  FAIL  … app/api/n8n/cb/route.ts:5  console.log logs "body"
@@ -351,10 +354,10 @@ C4   FAIL  lib/n8n.ts:3  n8n call, but lib/n8n/client.ts does not exist
 C5   FAIL  lib/n8n.ts:3  fetch without signal/timeout
 C6   FAIL  lib/n8n.ts:3  headers missing: x-n8n-token, idempotency-key, x-correlation-id
 C7   FAIL  app/api/quotes/callback/route.ts:2  request body parsed with .json() — the signature needs the raw bytes
-           app/api/quotes/callback/route.ts  raw body is never read (.text() / .arrayBuffer())
-C8   FAIL  app/api/quotes/callback/route.ts  no crypto.timingSafeEqual
-           app/api/quotes/callback/route.ts:3  signature compared with ===/!==
-C9   FAIL  app/api/quotes/callback/route.ts  header x-n8n-timestamp is never read · header idempotency-key is never read
+           app/api/quotes/callback/route.ts:1  raw body is never read (.text() / .arrayBuffer() / body.getReader())
+C8   FAIL  app/api/quotes/callback/route.ts:1  no crypto.timingSafeEqual
+           app/api/quotes/callback/route.ts:3  signature compared with ===/!== (req.headers.get("x-webhook-secret") … process.env.QUOTE_SECRET)
+C9   FAIL  app/api/quotes/callback/route.ts:1  header x-n8n-timestamp is never read · header idempotency-key is never read
 C13  FAIL  app/quote-actions.ts:4  startQuote() is awaited in the Server Action instead of inside after()
 ```
 
@@ -402,3 +405,51 @@ Summary: 8/8 as expected
 ## Task E3 (бонус) — ті самі скіли в Cursor
 
 Не виконувалось: Cursor у цій роботі не використовували, усі прогони — у Claude Code. Бонус Task E зроблено як E1 — `docs/skill-review-n8n.md`.
+
+## Після рев'ю CodeRabbit (PR #8)
+
+CodeRabbit залишив 13 коментарів і 1 невдалу передмерджеву перевірку («Task C — ⚠️: не кожен FAIL
+має файл:рядок»). Кожен коментар звірено з кодом — чинні всі; два (URL документа і `queued` у
+Server Action) стосувались лише шаблонів скіла: у перенесеному коді B це вже було.
+
+| # | Коментар | Що зроблено | Коміт |
+|---|---|---|---|
+| — | Передмерджева перевірка Task C: FAIL без номера рядка | для «цілофайлових» FAIL — рядок обробника `POST` або `:1`; вивід у цьому звіті й у `docs/ab-validation.md` перезнято | `cf97b0a` |
+| 1 | Шаблон клієнта повторює помилку конфігурації | env читається до циклу; повтори лише мережа/таймаут/5xx/524 | `e34208f`, код — `8d599e2` |
+| 2, 8 | `request.text()` буферизує все тіло до ліміту 64 КБ | `readRawBody`: потокове читання, зупинка після 64 КБ → 413; `callback.md` і `SKILL.md` оновлено | `e34208f`, `8d599e2` |
+| 3 | Шаблон ставить `ready` без придатного URL | шаблон = код B (`safeHttpUrl`, інакше `failed`) | `e34208f` |
+| 4 | Шаблон Server Action без умови `queued` | шаблон = код B (`updateQuote(id, next, "queued")`) + опис compare-and-set | `e34208f` |
+| 5 | C8 пропускає `===` у рядках з `.length`/`null` | перевіряються операнди кожного `===`/`!==`; запропонований у коментарі варіант не ловив `req.headers.get("x-webhook-secret") !== process.env.QUOTE_SECRET` — операндом тепер може бути й виклик | `cf97b0a` |
+| 6 | `LeadActions` ігнорує результат дії | відкат оптимістичного статусу / лишитись на сторінці + повідомлення `role="alert"` | `52e457a` |
+| 7 | Дії лідів повертають `ok`, хоча БД не знайшла лід | перевіряється результат `db.updateLeadStatus` / `db.deleteLead` | `52e457a` |
+| 9 | Виняток у `after()` лишає кошторис у `queued` | `try/catch` → `failed`; клієнт повертає `misconfigured` без винятку | `8d599e2` |
+| 10 | Нотатка: текст зникає після `error`; `defaultValue` ненадійний | `values` у кожному стані помилки, контрольована `textarea`, очищення лише після `ok`; патерн скіла виправлено | `e000dfe`, `e869ccc` |
+| 11 | Кошторис: значення зникають після `invalid`; помилки не прив'язані до полів | `values` у стані, контрольовані поля, `label`/`htmlFor`, `aria-invalid`, `aria-describedby`, підсумок `role="alert"` | `e000dfe` |
+| 12 | E1: Basic Auth дає 401 і на неправильні дані | уточнено (рядки 285 і 304; Bearer — 403, рядок 320) | цей коміт документів |
+| 13 | E1: висновок про ключ Crypto неточний | переписано: пакет радить `httpCustomAuth` + вхід sub-workflow; для Crypto v2 це зайво й гірше | цей коміт документів |
+
+Під час перевірки знайшлась ще одна помилка, про яку CodeRabbit не писав: React 19 перед кожною
+дією форми викликає `requestFormReset` (видно в `react-dom-client.production.js`), і контрольований
+`<select>` після цього лишається на першій опції — бюджет зникав навіть з контрольованими полями.
+Форма кошторису тепер з JS відправляється через `onSubmit` + `startTransition(() => formAction(fd))`
+(без автоматичного скидання), атрибут `action` лишився для шляху без JS.
+
+Як перевірено (продакшн-збірка, мок `--mode respond-202 --delay 5000`):
+
+| Перевірка | Результат |
+|---|---|
+| `npm run lint`, `npm run build`, `check-contract.mjs` на всьому коді | без помилок, 13 PASS / 0 FAIL |
+| `check-contract`: `main` / поганий код / приклад «як A» / прогін A / прогін B / шаблони | 7 / 11 / 10 / 9 / 0 / 0 FAIL — як і до правок; нове C8 на тестовому роуті ловить `sig === expected || sig == null` і header-vs-env, не чіпає `.length`/`null`/`typeof` |
+| Колбек: тіло 70 КБ | 413 `payload too large` (читання зупинено) |
+| Колбек: невеликий непідписаний | 401 |
+| Матриця `send-signed-callback.mjs` на гілці (ключ реального кошторису) | 8/8 |
+| Кошторис з JS: погана адреса email | помилка під полем (`aria-invalid`, `aria-describedby`), підсумок `role="alert"`; компанія, опис і бюджет `1500` на місці |
+| Кошторис з JS: виправлений email | відповідь за 146 мс → «У черзі» → колбек → «Готово» з PDF; бюджет «1 500 USD / міс.» |
+| Кошторис без JS (`multipart` POST) з поганими даними | сервер повернув усі чотири значення, `aria-invalid` ×2, `role="alert"` |
+| Нотатка: `leadId` підмінено на чужий лід | «Не вдалося зберегти нотатку», текст у полі лишився |
+| Нотатка: свій лід | «Нотатку додано», поле очистилось, нотатка на сторінці |
+| Лід видалено «в іншій вкладці», потім зміна статусу | повідомлення «Не вдалося змінити статус…», статус відкотився |
+
+Не перевірено вживу: шлях `misconfigured` (застосунок без `N8N_WEBHOOK_TOKEN`) — для цього треба
+змінити `.env.local`; перевірено лише типами й кодом.
+

@@ -89,18 +89,18 @@
          app/quotes/actions.ts:48  headers missing: x-n8n-token, idempotency-key, x-correlation-id
   C7   FAIL  Callback route reads the raw body; no .json() / JSON.parse before the signature check
          app/api/quotes/[id]/callback/route.ts:59  request body parsed with .json() — the signature needs the raw bytes
-         app/api/quotes/[id]/callback/route.ts  raw body is never read (.text() / .arrayBuffer())
+         app/api/quotes/[id]/callback/route.ts:44  raw body is never read (.text() / .arrayBuffer() / body.getReader())
   C8   FAIL  Callback signature compared with crypto.timingSafeEqual, never === / !==
-         app/api/quotes/[id]/callback/route.ts  no crypto.timingSafeEqual
+         app/api/quotes/[id]/callback/route.ts:44  no crypto.timingSafeEqual
   C9   FAIL  Callback route checks x-n8n-timestamp and idempotency-key
-         app/api/quotes/[id]/callback/route.ts  header x-n8n-timestamp is never read
-         app/api/quotes/[id]/callback/route.ts  header idempotency-key is never read
+         app/api/quotes/[id]/callback/route.ts:44  header x-n8n-timestamp is never read
+         app/api/quotes/[id]/callback/route.ts:44  header idempotency-key is never read
   C10  PASS  No export const runtime = 'edge'
   C11  FAIL  .env.example: contract keys present, secrets are change-me-..., base URL ends in /webhook
-         .env.example  N8N_WEBHOOK_BASE_URL is missing
-         .env.example  N8N_WEBHOOK_TOKEN is missing
-         .env.example  N8N_CALLBACK_SECRET is missing
-         .env.example  APP_BASE_URL is missing
+         .env.example:1  N8N_WEBHOOK_BASE_URL is missing
+         .env.example:1  N8N_WEBHOOK_TOKEN is missing
+         .env.example:1  N8N_CALLBACK_SECRET is missing
+         .env.example:1  APP_BASE_URL is missing
   C12  FAIL  No request bodies or personal data in console.* of n8n-related files
          app/api/quotes/[id]/callback/route.ts:73  console.error logs "body"
   C13  FAIL  In "use server" files every n8n call runs inside after() — the user never waits for n8n
