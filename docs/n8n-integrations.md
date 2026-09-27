@@ -4,7 +4,16 @@
 
 | event | напрям | шлях n8n | режим | власник |
 |---|---|---|---|---|
-| `quote-request` | Next.js → n8n → колбек `POST /api/n8n/quote-request` | `/webhook/quote-request` | Respond to Webhook 202 `{"job_id"}` + підписаний колбек (воркфлоу 40–90 с) | _уточнити_ |
+| `lead-created` | Next.js → n8n | `/webhook/lead-created` | Immediately (подія «до відома», без колбека) | ValiaBihun |
+| `quote-request` | Next.js → n8n → колбек `POST /api/n8n/quote-request` | `/webhook/quote-request` | Respond to Webhook 202 `{"job_id"}` + підписаний колбек (воркфлоу 40–90 с) | ValiaBihun |
+
+## `lead-created`
+
+- Запуск: Server Action `submitLead` (`app/actions.ts`) з публічної форми `/`; виклик n8n — в `after()`
+  разом із записом в аудит, відвідувач n8n не чекає.
+- Дані для воркфлоу: `{ leadId, fullName, email, phone, company, website, budget, message,
+  consentMarketing, source }` — без IP, user agent, `rawPayload` і внутрішніх полів.
+- Відповідь n8n: дивимось лише на код статусу; колбека немає.
 
 ## `quote-request`
 
