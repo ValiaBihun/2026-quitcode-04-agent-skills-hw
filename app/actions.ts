@@ -101,7 +101,8 @@ export async function updateLeadStatus(id: string, status: LeadStatus): Promise<
   const lead = await findOwnLead(id);
   if (!lead || !LEAD_STATUSES.includes(status)) return { status: "error" };
 
-  await db.updateLeadStatus(lead.id, status);
+  // the lead may have been deleted in between: report it instead of claiming success
+  if (!(await db.updateLeadStatus(lead.id, status))) return { status: "error" };
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/leads/${lead.id}`);
   return { status: "ok" };
@@ -111,7 +112,7 @@ export async function deleteLead(id: string): Promise<LeadMutationResult> {
   const lead = await findOwnLead(id);
   if (!lead) return { status: "error" };
 
-  await db.deleteLead(lead.id);
+  if (!(await db.deleteLead(lead.id))) return { status: "error" };
   revalidatePath("/dashboard");
   return { status: "ok" };
 }

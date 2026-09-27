@@ -9,21 +9,33 @@ import { STATUS_LABELS } from "./status-badge";
 export function LeadActions({ leadId, status }: { leadId: string; status: LeadStatus }) {
   const router = useRouter();
   const [current, setCurrent] = useState<LeadStatus>(status);
+  const [failed, setFailed] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   function changeStatus(next: LeadStatus) {
+    const previous = current;
     setCurrent(next);
+    setFailed(null);
     startTransition(async () => {
-      await updateLeadStatus(leadId, next);
-      router.refresh();
+      const result = await updateLeadStatus(leadId, next);
+      if (result.status === "ok") return; // the action already revalidates this page
+      startTransition(() => {
+        setCurrent(previous); // roll the optimistic value back
+        setFailed("Не вдалося змінити статус. Можливо, лід уже видалено — оновіть сторінку.");
+      });
     });
   }
 
   function remove() {
     if (!window.confirm("Видалити лід назавжди?")) return;
+    setFailed(null);
     startTransition(async () => {
-      await deleteLead(leadId);
-      router.push("/dashboard");
+      const result = await deleteLead(leadId);
+      if (result.status === "ok") {
+        router.push("/dashboard");
+        return;
+      }
+      startTransition(() => setFailed("Не вдалося видалити лід. Оновіть сторінку й спробуйте ще раз."));
     });
   }
 
@@ -52,6 +64,9 @@ export function LeadActions({ leadId, status }: { leadId: string; status: LeadSt
       >
         Видалити лід
       </button>
+      <p role="alert" className="w-full text-sm text-red-700 empty:hidden">
+        {failed}
+      </p>
     </div>
   );
 }
