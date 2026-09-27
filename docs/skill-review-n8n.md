@@ -68,17 +68,23 @@
 
 - Ліцензія: Apache-2.0 — файл `LICENSE`, поле `license` у `plugin.json` і `package.json`.
 - Видавець і активність: організація `n8n-io` (автор у маніфесті — n8n, <https://n8n.io>); на
-  skills.sh 25,8 тис. встановлень; останній коміт 22.08.2026. У репозиторії є два набори скілів
-  (`*-official` і старіші без суфікса на skills.sh) — легко поставити не той.
+  skills.sh 25,8 тис. встановлень; останній коміт 22.08.2026. У репозиторії на переглянутому
+  коміті — лише скіли з суфіксом `-official`, але на skills.sh поруч з ними досі висять старі
+  версії без суфікса (`n8n-debugging`, `using-n8n-skills`, `n8n-connections`…, 119–394 встановлення
+  кожна) — легко встановити не ту.
 
 ## 5. Чи правдивий зміст для нашого стеку
 
 Звірено з запискою команди (`materials/n8n-webhooks-brief.md`, розділ «Відомі пастки») і з кодом
-n8n на GitHub (`n8n-io/n8n`, гілка `master`, читання в браузері):
+n8n на GitHub — `n8n-io/n8n`, коміт **`2f2bac4645472e5efc72c4efedaadff6ef50348e`** (`master` на
+27.09.2026, `git ls-remote https://github.com/n8n-io/n8n refs/heads/master`); файли читали в
+браузері за цим SHA, номери рядків нижче — саме для нього:
+[Webhook/utils.ts](https://github.com/n8n-io/n8n/blob/2f2bac4645472e5efc72c4efedaadff6ef50348e/packages/nodes-base/nodes/Webhook/utils.ts#L324-L343),
+[Crypto/v2/CryptoV2.node.ts](https://github.com/n8n-io/n8n/blob/2f2bac4645472e5efc72c4efedaadff6ef50348e/packages/nodes-base/nodes/Crypto/v2/CryptoV2.node.ts#L581-L596).
 
 | Порада пакета (файл) | Що каже пакет | Що кажуть код n8n / записка | Висновок |
 |---|---|---|---|
-| Header Auth на Webhook (`n8n-node-configuration-official/references/WEBHOOK_NODES.md:13`) | «Use `parameters.authentication` (`'basicAuth'` or `'headerAuth'`) … n8n rejects mismatched callers with **401** before the workflow runs» | `packages/nodes-base/nodes/Webhook/utils.ts`: гілка `authentication === 'headerAuth'` → `throw new WebhookAuthorizationError(403)` (рядок 343); 401 — лише Basic Auth (відсутні дані) і JWT («No token provided»). Записка: Header Auth → **403** «Authorization data is wrong!». Наш мок теж повертає 403 | **Неправда** для Header Auth. Агент, що вірить пакету, чекатиме 401 і неправильно обробить помилку токена |
+| Header Auth на Webhook (`n8n-node-configuration-official/references/WEBHOOK_NODES.md:13`) | «Use `parameters.authentication` (`'basicAuth'` or `'headerAuth'`) … n8n rejects mismatched callers with **401** before the workflow runs» | `packages/nodes-base/nodes/Webhook/utils.ts`: гілка `authentication === 'headerAuth'` → `throw new WebhookAuthorizationError(403)` (рядки 324 і 343); 401 — лише Basic Auth (відсутні дані) і JWT («No token provided»). Записка: Header Auth → **403** «Authorization data is wrong!». Наш мок теж повертає 403 | **Неправда** для Header Auth. Агент, що вірить пакету, чекатиме 401 і неправильно обробить помилку токена |
 | Секрет вузла Crypto (`n8n-credentials-and-security-official/references/CUSTOM_CREDENTIALS.md:21`) | «the Crypto node's `secret` field **doesn't bind to a credential**, so the signing key has nowhere clean to live» | `packages/nodes-base/nodes/Crypto/v2/CryptoV2.node.ts`: `credentials: [{ name: 'crypto' … }]`, `this.getCredentials<{ hmacSecret?… }>` → «No HMAC secret set in credentials. Please add an HMAC secret to your Crypto credentials» (рядки 86–89, 581–596). Записка: для Crypto v2 секрет — Hmac Secret у Crypto credential | **Застаріло** для Crypto v2. Порада штовхає тримати ключ підпису поза credentials — саме того, що наша записка забороняє |
 | Приклад HMAC у Code (`n8n-code-nodes-official/references/JAVASCRIPT_PATTERNS.md:128-142`) | `createHmac('sha256', item.secret)` — секрет з вхідних даних; нижче примітка «The secret should come from a credential» | Той самий пакет у `using-n8n-skills-official`: «Tokens/secrets never go in text fields» | Суперечить сам собі; приклад варто сприймати як антипатерн |
 | Режим відповіді `onReceived` (`WEBHOOK_NODES.md:21`) | «Returns 200 immediately» | Записка: 200 одразу; текст — `{"message":"Workflow was started"}`, не «Workflow got started» з документації; текст не парсимо | Правдиво; про текст пакет мовчить — не шкодить |
@@ -90,9 +96,13 @@ n8n на GitHub (`n8n-io/n8n`, гілка `master`, читання в брауз
   як плагін — `/plugin marketplace add n8n-io/skills`, `/plugin install n8n-skills@n8n-io`, запит
   URL екземпляра n8n (MCP) — тобто **без закріпленої версії**; skills.sh показує
   `npx skills add n8n-io/skills` (лише скіли, теж без версії). Закріпити тегом не вийде — тегів
-  немає, а `#v1.2.0` з README (рядок 75) вказує на неіснуючий тег. Якщо колись знадобиться — лише
-  `npx skills@1.7.0 add "n8n-io/skills#180b8415e3b73f78828cfa01e908e67f89f2a139" --skill <назва> --copy`,
-  без плагінної частини.
+  немає, а `#v1.2.0` з README (рядок 75) вказує на неіснуючий тег. Чи приймає
+  `npx skills@1.7.0 add "n8n-io/skills#<SHA>"` повний SHA коміту замість тега — **не перевіряли**
+  (перевірка вимагала б запуску встановлення; якщо CLI клонує через `git clone --branch`, SHA він не
+  прийме). Якщо пакет колись знадобиться, спершу з'ясувати це в документації CLI; без робочого
+  способу закріпити версію — не встановлювати, або брати окремі скіли вручну з клону на SHA
+  `180b8415…` у `.claude/skills/` і рев'ювати їх як власний код. Плагінну частину (хуки, MCP) — ні в
+  якому разі.
 - Де лягли файли; справжні файли чи посилання: — (не встановлювали)
 - Що потрапило в git: нічого з пакета; лише це рев'ю.
 - Як оновлювати: не застосовно. При повторному рев'ю — новий SHA, `git diff` між SHA, окремо
