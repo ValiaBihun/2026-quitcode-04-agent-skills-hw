@@ -113,12 +113,11 @@ function stripComments(text) {
       quote = ch;
       out += ch;
     } else if (ch === "/" && next === "/") {
-      while (i < text.length && text[i] !== "\n") (out += " "), i++;
+      for (; i < text.length && text[i] !== "\n"; i++) out += " ";
       if (i < text.length) out += "\n";
     } else if (ch === "/" && next === "*") {
       out += "  ";
-      i += 2;
-      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) (out += text[i] === "\n" ? "\n" : " "), i++;
+      for (i += 2; i < text.length && !(text[i] === "*" && text[i + 1] === "/"); i++) out += text[i] === "\n" ? "\n" : " ";
       out += "  ";
       i++;
     } else {
@@ -128,10 +127,13 @@ function stripComments(text) {
   return out;
 }
 
+// Windows checkouts (core.autocrlf=true) have CRLF: normalise, or `$` in line regexes misses.
+const readText = (abs) => fs.readFileSync(abs, "utf8").replace(/\r\n?/g, "\n");
+
 const files = new Map(); // rel path -> text without comments
-for (const abs of walk(root)) files.set(rel(abs), stripComments(fs.readFileSync(abs, "utf8")));
+for (const abs of walk(root)) files.set(rel(abs), stripComments(readText(abs)));
 const envExamplePath = path.join(root, ".env.example");
-const envExample = fs.existsSync(envExamplePath) ? fs.readFileSync(envExamplePath, "utf8") : null;
+const envExample = fs.existsSync(envExamplePath) ? readText(envExamplePath) : null;
 
 // ---------------------------------------------------------------------------
 // --changed-since: which files / lines count
