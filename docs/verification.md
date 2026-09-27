@@ -226,7 +226,7 @@ TTFB 1.428993s, total 1.429588s
   за id (`server-auth-actions`, `server-after-nonblocking`), без копіювання.
 - Шаблони перевірено до коміту на тимчасовій копії проєкту поза репозиторієм (`../tmp-n8n-templates`,
   `git archive HEAD` + `npm ci`): `next build` і ESLint без помилок; `check-contract --changed-since base`
-  — 12 PASS, 0 FAIL; з моком `--mode respond-202 --delay 2000` і згенерованими тестовими
+  — 13 PASS, 0 FAIL (Server Action із шаблону окремо — C13 PASS); з моком `--mode respond-202 --delay 2000` і згенерованими тестовими
   секретами: `POST /webhook/quote-request -> 202 … auth=ok idempotency=new`, через 2 с
   `callback POST …/api/n8n/quote-request -> 202 (try 1/3)`, запис перейшов у `ready` з
   `documentUrl`; матриця колбеків — 8/8 (нижче).
@@ -236,11 +236,13 @@ TTFB 1.428993s, total 1.429588s
   ≥ 100 с або невідомої тривалості; колбек без підпису / токен у query / «тимчасово вимкнути
   перевірку»; зміна воркфлоу в n8n, експорт/імпорт JSON, код для вузла Code; відповідь n8n чи
   колбек не збігається з контрактом — не підлаштовувати контракт мовчки.
-- SHA коміту зі скілом (BASE для Task D): `5fd64c0` (`skills: add integrating-n8n-webhooks (contract, references, scripts)`).
+- SHA коміту зі скілом (BASE для Task D): **`ff395fb`** (`skills(n8n): make check-contract catch
+  code that ignores the contract names`). Перший коміт скіла — `5fd64c0`; до прогонів скрипт
+  посилили (див. нижче «Перевірка на коді з іншими назвами»), тож BASE — другий коміт.
 - Що скіл змінив у собі після прогонів (коміти й чому): поки нічого (прогонів ще не було).
 
 `check-contract.mjs`: Node без залежностей (`node:fs`, `node:path`, `node:child_process`,
-`node:util`), 12 перевірок C1–C12 з PASS/FAIL, для FAIL — `файл:рядок`, код виходу 1 при FAIL
+`node:util`), 13 перевірок C1–C13 з PASS/FAIL, для FAIL — `файл:рядок`, код виходу 1 при FAIL
 (2 — помилка аргументів), `--root`, `--changed-since <ref>` (змінені файли + нові неіндексовані,
 у наявних — лише змінені рядки), `--help`. Коментарі в коді перед аналізом прибираються (номери
 рядків не зсуваються); `.env.local` скрипт не читає.
@@ -253,7 +255,7 @@ check-contract: root=…\leaddesk-main files=28
 C1   FAIL  No test webhook URL (/webhook-test/) in code or .env.example
        .env.example:6  test URL /webhook-test/
 C2   PASS  No N8N_* variable with the NEXT_PUBLIC_ prefix
-C3   FAIL  n8n webhook env vars are read only in lib/n8n/client.ts
+C3   FAIL  N8N_* env vars (except N8N_CALLBACK_SECRET) are read only in lib/n8n/client.ts
        app/actions.ts:54  N8N_WEBHOOK_URL outside lib/n8n/client.ts
 C4   FAIL  lib/n8n/client.ts exists for every n8n call and starts with import 'server-only'
        app/actions.ts:54  n8n call, but lib/n8n/client.ts does not exist
@@ -261,9 +263,9 @@ C5   FAIL  Every fetch to n8n has a timeout (signal: AbortSignal.timeout(...))
        app/actions.ts:54  fetch without signal/timeout
 C6   FAIL  Every n8n call sends x-n8n-token, idempotency-key and x-correlation-id
        app/actions.ts:54  headers missing: x-n8n-token, idempotency-key, x-correlation-id
-C7   PASS  Callback route reads the raw body; no .json() / JSON.parse before the signature check (n/a: no callback route with x-n8n-signature / N8N_CALLBACK_SECRET)
-C8   PASS  Callback signature compared with crypto.timingSafeEqual, never === / !== (n/a: no callback route with x-n8n-signature / N8N_CALLBACK_SECRET)
-C9   PASS  Callback route checks x-n8n-timestamp and idempotency-key (n/a: no callback route with x-n8n-signature / N8N_CALLBACK_SECRET)
+C7   PASS  Callback route reads the raw body; no .json() / JSON.parse before the signature check (n/a: no callback route found under app/**/route.*)
+C8   PASS  Callback signature compared with crypto.timingSafeEqual, never === / !== (n/a: no callback route found under app/**/route.*)
+C9   PASS  Callback route checks x-n8n-timestamp and idempotency-key (n/a: no callback route found under app/**/route.*)
 C10  PASS  No export const runtime = 'edge'
 C11  FAIL  .env.example: contract keys present, secrets are change-me-..., base URL ends in /webhook
        .env.example  N8N_WEBHOOK_BASE_URL is missing
@@ -271,9 +273,13 @@ C11  FAIL  .env.example: contract keys present, secrets are change-me-..., base 
        .env.example  N8N_CALLBACK_SECRET is missing
        .env.example  APP_BASE_URL is missing
 C12  PASS  No request bodies or personal data in console.* of n8n-related files
-Summary: 6 PASS, 6 FAIL
+C13  FAIL  In "use server" files every n8n call runs inside after() — the user never waits for n8n
+       app/actions.ts:54  fetch to n8n is awaited in the Server Action instead of inside after()
+Summary: 6 PASS, 7 FAIL
 exit=1
 ```
+
+C13 пояснює 2,43 с відправки форми з бази Task A: дія чекає n8n до відповіді користувачу.
 
 Це збігається з тим, що видно в журналі мока з розділу 0: форма шле `POST` без `x-n8n-token`,
 `idempotency-key` і `x-correlation-id` (`auth=none idempotency=absent`), а з `/webhook-test/` із
@@ -297,13 +303,42 @@ C9   FAIL  … header x-n8n-timestamp is never read · header idempotency-key is
 C10  FAIL  … app/api/n8n/cb/route.ts:2  edge runtime is deprecated in Next.js 16 and has no node:crypto
 C11  FAIL  … N8N_CALLBACK_SECRET is missing · APP_BASE_URL is missing · .env.example:2  N8N_WEBHOOK_TOKEN must be change-me-... (value not printed) · .env.example:1  N8N_WEBHOOK_BASE_URL must end in /webhook
 C12  FAIL  … app/api/n8n/cb/route.ts:5  console.log logs "body"
-Summary: 1 PASS, 11 FAIL
+C13  PASS  (n/a: no n8n calls in "use server" files)
+Summary: 2 PASS, 11 FAIL
 ```
 
-(C3 тут PASS правильно: поганий код читає `NEXT_PUBLIC_N8N_…`, а це ловить C2.) Під час цієї
-перевірки знайшли й виправили в скрипті три речі: C1 не бачив `/webhook-test` без кінцевого слеша;
-C7 спрацьовував на коментар `// never request.json() here`; C12 вважав порушенням
-`Buffer.byteLength(raw)`, хоча довжину тіла контракт логувати дозволяє.
+(C3 тут PASS правильно: поганий код читає `NEXT_PUBLIC_N8N_…`, а це ловить C2; C13 — n/a, бо
+серверних дій у цьому шматку немає.) Під час цієї перевірки знайшли й виправили в скрипті три
+речі: C1 не бачив `/webhook-test` без кінцевого слеша; C7 спрацьовував на коментар
+`// never request.json() here`; C12 вважав порушенням `Buffer.byteLength(raw)`, хоча довжину тіла
+контракт логувати дозволяє.
+
+**Перевірка на коді з іншими назвами** — те, що міг би написати агент без скіла: `lib/n8n.ts` з
+`process.env.N8N_QUOTE_WEBHOOK_URL` і `fetch` без таймауту й заголовків; колбек
+`app/api/quotes/callback/route.ts` з `req.json()` і `x-webhook-secret !== process.env.QUOTE_SECRET`;
+Server Action, що робить `await startQuote(…)`. Перша версія скрипта (`5fd64c0`) не побачила в цих
+файлах **нічого**: знала лише назви з контракту (`N8N_WEBHOOK_*`, `x-n8n-signature`,
+`N8N_CALLBACK_SECRET`), а перевірки «Server Action не чекає n8n» не мала. Для A/B це означало б,
+що прогін A без скіла отримує менше FAIL, ніж заслуговує. Виправлено в `ff395fb`: C3 — будь-яка
+`N8N_*`, крім секрету колбека; колбеком вважається й POST-роут, у шляху чи коді якого є
+n8n / webhook / callback / signature / secret (але не роут, що лише запускає воркфлоу); нова C13.
+Після виправлення — ті самі три файли:
+
+```
+C3   FAIL  lib/n8n.ts:1  N8N_QUOTE_WEBHOOK_URL outside lib/n8n/client.ts
+C4   FAIL  lib/n8n.ts:3  n8n call, but lib/n8n/client.ts does not exist
+C5   FAIL  lib/n8n.ts:3  fetch without signal/timeout
+C6   FAIL  lib/n8n.ts:3  headers missing: x-n8n-token, idempotency-key, x-correlation-id
+C7   FAIL  app/api/quotes/callback/route.ts:2  request body parsed with .json() — the signature needs the raw bytes
+           app/api/quotes/callback/route.ts  raw body is never read (.text() / .arrayBuffer())
+C8   FAIL  app/api/quotes/callback/route.ts  no crypto.timingSafeEqual
+           app/api/quotes/callback/route.ts:3  signature compared with ===/!==
+C9   FAIL  app/api/quotes/callback/route.ts  header x-n8n-timestamp is never read · header idempotency-key is never read
+C13  FAIL  app/quote-actions.ts:4  startQuote() is awaited in the Server Action instead of inside after()
+```
+
+Шаблони скіла після виправлення — як і раніше 0 FAIL (13 PASS); тимчасовий роут, що лише
+запускає воркфлоу, колбеком не вважається.
 
 **`check-contract.mjs` на фінальному коді** (після перенесення прогону B — 0 FAIL):
 
