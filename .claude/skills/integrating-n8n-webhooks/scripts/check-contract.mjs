@@ -241,10 +241,20 @@ const n8nRelated = (file, text) =>
 // ---------------------------------------------------------------------------
 
 const results = [];
+// A finding about a whole file (line 0: "raw body is never read", "KEY is missing") still gets
+// a real line to point at: the route's POST handler, otherwise line 1.
+function anchorLine(file) {
+  const text = file === ".env.example" ? envExample : files.get(file);
+  const m = text && /export\s+(?:async\s+)?function\s+POST\b|export\s+const\s+POST\b/.exec(text);
+  return m ? lineOf(text, m.index) : 1;
+}
+
 function check(id, title, run) {
   const findings = [];
-  const note = run((file, line, message) => findings.push({ file, line, message }));
-  const kept = findings.filter((f) => counts(f.file, f.line));
+  const note = run((file, line, message) =>
+    findings.push({ file, line: line || anchorLine(file), wholeFile: !line, message }),
+  );
+  const kept = findings.filter((f) => counts(f.file, f.wholeFile ? 0 : f.line));
   results.push({ id, title, findings: kept, note: typeof note === "string" ? note : "" });
 }
 
@@ -332,7 +342,9 @@ check("C7", "Callback route reads the raw body; no .json() / JSON.parse before t
     for (const m of text.matchAll(/(?<!Response)(?<!NextResponse)\.json\s*\(\s*\)/g)) {
       report(file, lineOf(text, m.index), "request body parsed with .json() — the signature needs the raw bytes");
     }
-    if (!/\.text\s*\(\s*\)|\.arrayBuffer\s*\(\s*\)/.test(text)) report(file, 0, "raw body is never read (.text() / .arrayBuffer())");
+    if (!/\.text\s*\(\s*\)|\.arrayBuffer\s*\(\s*\)|\.getReader\s*\(/.test(text)) {
+      report(file, 0, "raw body is never read (.text() / .arrayBuffer() / body.getReader())");
+    }
     // first place the signature is checked: timingSafeEqual itself or a helper that wraps it
     const verify = text.search(/timingSafeEqual|\bverify\w*\s*\(|\bsignature\w*\s*\(/i);
     for (const m of text.matchAll(/JSON\.parse\s*\(/g)) {
@@ -345,10 +357,19 @@ check("C7", "Callback route reads the raw body; no .json() / JSON.parse before t
 check("C8", "Callback signature compared with crypto.timingSafeEqual, never === / !==", (report) => {
   for (const [file, text] of callbackRoutes) {
     if (!/timingSafeEqual/.test(text)) report(file, 0, "no crypto.timingSafeEqual");
+    // Look at the two operands of every === / !==, not at the whole line: `sig === expected ||
+    // sig == null` is still a plain comparison. An operand is an identifier chain, optionally
+    // ending in one call — `req.headers.get("x-webhook-secret") !== process.env.QUOTE_SECRET`.
+    const OPERAND = String.raw`(?:typeof\s+)?[\w$.?]+(?:\([^()]*\))?|"[^"]*"|'[^']*'`;
+    const SECRETISH = /signature|digest|hmac|expected|secret|token/i;
+    const HARMLESS = /^(?:null|undefined)$|\.length$|^typeof\s/;
     text.split("\n").forEach((line, i) => {
-      if (/[!=]==?/.test(line) && /signature|digest|hmac|expected|secret|token/i.test(line) &&
-          !/\.length|typeof|null|undefined|startsWith/.test(line) && /[!=]==/.test(line)) {
-        report(file, i + 1, "signature compared with ===/!==");
+      for (const m of line.matchAll(new RegExp(`(${OPERAND})\\s*[!=]==\\s*(${OPERAND})`, "g"))) {
+        const [, left, right] = m;
+        if (HARMLESS.test(left) || HARMLESS.test(right)) continue; // null / length / typeof checks
+        if (SECRETISH.test(left) || SECRETISH.test(right)) {
+          report(file, i + 1, `signature compared with ===/!== (${left.slice(0, 40)} … ${right.slice(0, 40)})`);
+        }
       }
     });
   }
@@ -452,7 +473,7 @@ for (const r of results) {
   const ok = r.findings.length === 0;
   if (!ok) failed++;
   console.log(`${r.id.padEnd(4)} ${ok ? "PASS" : "FAIL"}  ${r.title}${ok && r.note ? ` ${r.note}` : ""}`);
-  for (const f of r.findings) console.log(`       ${f.file}${f.line ? `:${f.line}` : ""}  ${f.message}`);
+  for (const f of r.findings) console.log(`       ${f.file}:${f.line}  ${f.message}`);
 }
 console.log(`Summary: ${results.length - failed} PASS, ${failed} FAIL`);
 process.exit(failed ? 1 : 0);
