@@ -9,6 +9,26 @@ const MAX_SKEW_SECONDS = 300;
 
 const reply = (status: number, body: Record<string, unknown> = {}) => Response.json(body, { status });
 
+// Route Handlers have no body-size limit of their own, and request.text() would buffer the
+// whole body first. Read the raw bytes ourselves and stop as soon as the limit is passed.
+async function readRawBody(request: Request, maxBytes: number): Promise<string | null> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 function signatureMatches(timestamp: string, raw: string, header: string | null) {
   const secret = process.env.N8N_CALLBACK_SECRET;
   if (!secret || !header?.startsWith("sha256=")) return false;
@@ -25,8 +45,8 @@ export async function POST(request: Request, ctx: RouteContext<"/api/n8n/[event]
     return reply(415, { error: "unsupported media type" });
   }
 
-  const raw = await request.text(); // 2 — raw bytes; never request.json() here
-  if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return reply(413, { error: "payload too large" }); // 3
+  const raw = await readRawBody(request, MAX_BODY_BYTES); // 2+3 — raw bytes, at most 64 KiB; never request.json()
+  if (raw === null) return reply(413, { error: "payload too large" });
 
   const timestamp = request.headers.get("x-n8n-timestamp") ?? "";
   const skew = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));

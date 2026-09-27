@@ -5,12 +5,14 @@ export type N8nEvent = "lead-created" | "quote-request";
 
 export type TriggerResult =
   | { ok: true; status: number; jobId: string | null }
-  | { ok: false; status: number | null; reason: "rejected" | "unavailable" };
+  | { ok: false; status: number | null; reason: "misconfigured" | "rejected" | "unavailable" };
 
 const TIMEOUT_MS = 10_000;
 const RETRY_DELAYS_MS = [1_000, 3_000]; // up to 2 retries → 3 attempts
 
-function serverEnv(name: "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BASE_URL") {
+type EnvName = "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BASE_URL";
+
+function serverEnv(name: EnvName) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not set`);
   return value;
@@ -18,6 +20,14 @@ function serverEnv(name: "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BAS
 
 export function callbackUrlFor(event: N8nEvent) {
   return `${serverEnv("APP_BASE_URL")}/api/n8n/${event}`;
+}
+
+// Missing configuration is not transient: report it once instead of retrying.
+function readConfig(withCallback: boolean): { missing: EnvName[] } | { baseUrl: string; token: string } {
+  const names: EnvName[] = ["N8N_WEBHOOK_BASE_URL", "N8N_WEBHOOK_TOKEN", ...(withCallback ? ["APP_BASE_URL" as const] : [])];
+  const missing = names.filter((name) => !process.env[name]);
+  if (missing.length) return { missing };
+  return { baseUrl: serverEnv("N8N_WEBHOOK_BASE_URL"), token: serverEnv("N8N_WEBHOOK_TOKEN") };
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,7 +44,12 @@ export async function triggerWorkflow<T extends Record<string, unknown>>(options
   withCallback?: boolean; // async workflows (202 + callback)
 }): Promise<TriggerResult> {
   const { event, idempotencyKey, correlationId } = options;
-  const url = `${serverEnv("N8N_WEBHOOK_BASE_URL")}/${event}`;
+  const config = readConfig(Boolean(options.withCallback));
+  if ("missing" in config) {
+    console.error(`[n8n] -> ${event} not sent: ${config.missing.join(", ")} not set cid=${correlationId}`);
+    return { ok: false, status: null, reason: "misconfigured" };
+  }
+  const url = `${config.baseUrl}/${event}`;
   const payload = JSON.stringify({
     version: 1,
     event,
@@ -52,7 +67,7 @@ export async function triggerWorkflow<T extends Record<string, unknown>>(options
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-n8n-token": serverEnv("N8N_WEBHOOK_TOKEN"),
+          "x-n8n-token": config.token,
           "idempotency-key": idempotencyKey,
           "x-correlation-id": correlationId,
         },
