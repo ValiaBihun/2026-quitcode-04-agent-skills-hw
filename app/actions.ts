@@ -1,10 +1,13 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { headers } from "next/headers";
+import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { parseLeadForm, type LeadFormField } from "@/lib/lead-form";
+import { triggerWorkflow } from "@/lib/n8n/client";
 import type { LeadStatus } from "@/lib/types";
 
 const PUBLIC_FORM_WORKSPACE_ID = "ws_studio_nova";
@@ -50,17 +53,34 @@ export async function submitLead(
     },
   });
 
-  try {
-    await fetch(process.env.N8N_WEBHOOK_URL!, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(lead),
-    });
-  } catch (error) {
-    console.error(`Failed to send lead ${lead.id} to n8n`, error);
-  }
+  // One key per submitted lead: every retry inside triggerWorkflow reuses it.
+  const idempotencyKey = randomUUID();
+  const correlationId = randomUUID();
 
-  await logAudit("lead.created", lead.id);
+  // The visitor never waits for n8n or the audit log (server-after-nonblocking).
+  after(async () => {
+    await Promise.allSettled([
+      triggerWorkflow({
+        event: "lead-created",
+        // only what the workflow needs — no IP, user agent, raw payload or internal fields
+        data: {
+          leadId: lead.id,
+          fullName: lead.fullName,
+          email: lead.email,
+          phone: lead.phone,
+          company: lead.company,
+          website: lead.website,
+          budget: lead.budget,
+          message: lead.message,
+          consentMarketing: lead.consentMarketing,
+          source: lead.source,
+        },
+        idempotencyKey,
+        correlationId,
+      }),
+      logAudit("lead.created", lead.id),
+    ]);
+  });
 
   return { status: "ok" };
 }

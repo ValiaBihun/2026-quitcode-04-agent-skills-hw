@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 
-export type N8nEvent = "quote-request";
+export type N8nEvent = "lead-created" | "quote-request";
 
 export type TriggerResult =
   | { ok: true; status: number; jobId: string | null }
