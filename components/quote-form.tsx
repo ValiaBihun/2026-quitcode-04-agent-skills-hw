@@ -54,6 +54,22 @@ export function QuoteForm() {
     startTransition(() => formAction(formData));
   }
 
+  if (createdId) {
+    // With JS the effect above navigates; without JS this link is the way to the status page.
+    return (
+      <div className="space-y-3 py-6 text-center" aria-live="polite">
+        <p className="text-lg font-medium">Запит прийнято.</p>
+        <p className="text-sm text-slate-600">Кошторис готується — його статус видно на сторінці запиту.</p>
+        <a
+          href={`/quotes/${createdId}`}
+          className="inline-block rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+        >
+          Відкрити статус запиту
+        </a>
+      </div>
+    );
+  }
+
   return (
     <form action={formAction} onSubmit={submit} className="space-y-4" noValidate>
       {state.status === "invalid" && (
@@ -136,10 +152,10 @@ export function QuoteForm() {
 
       <button
         type="submit"
-        disabled={pending || createdId !== null}
+        disabled={pending}
         className="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
       >
-        {pending || createdId ? "Надсилаємо…" : "Запросити кошторис"}
+        {pending ? "Надсилаємо…" : "Запросити кошторис"}
       </button>
     </form>
   );
