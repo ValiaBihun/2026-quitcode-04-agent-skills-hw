@@ -230,6 +230,14 @@
   збереження введеного й доступні помилки у формі кошторису — коміти `8d599e2`, `e000dfe`; скіл
   підтягнуто окремо (`cf97b0a`, `e34208f`). Деталі й перевірки — у `docs/verification.md`, розділ
   «Після рев'ю CodeRabbit».
+- Другий раунд рев'ю CodeRabbit позначив Task D як ⚠️: перенесений клієнт (так само, як шаблон скіла)
+  читав і парсив тіло відповіді n8n заради `job_id`, хоча контракт рахує лише код статусу, а колбек без
+  `data.requestIdempotencyKey` отримував 500 замість 400. Виправлено в `cb37e1d` (код) і `d94b1dd`
+  (скіл); там же клієнт вимагає `N8N_CALLBACK_SECRET` для воркфлоу з колбеком. Сценарій на гілці
+  повторено після цих змін: форма відповіла за **142 мс**, мок — `POST /webhook/quote-request -> 202 …
+  auth=ok idempotency=new`, через 5 с `callback POST …/api/n8n/quote-request -> 202`, `/quotes/<id>` —
+  «Готово» з PDF; підписаний колбек без `requestIdempotencyKey` → 400; матриця колбеків — 8/8;
+  `check-contract.mjs` на всьому коді — 13 PASS, 0 FAIL.
 - Ключі контракту в `.env.example`: `N8N_WEBHOOK_BASE_URL=http://127.0.0.1:5678/webhook`,
   `N8N_WEBHOOK_TOKEN=change-me-webhook-token`, `N8N_CALLBACK_SECRET=change-me-callback-secret`,
   `APP_BASE_URL=http://127.0.0.1:3000`; `/webhook-test/` немає.
