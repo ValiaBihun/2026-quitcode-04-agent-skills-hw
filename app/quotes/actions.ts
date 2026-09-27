@@ -22,7 +22,8 @@ export async function requestQuote(_prevState: QuoteFormState, formData: FormDat
   // The workflow takes 40–90 s: the user never waits for n8n. n8n answers 202 {job_id}
   // right away and calls /api/n8n/quote-request when the PDF is ready.
   after(async () => {
-    let next: { status: "processing"; jobId: string | null } | { status: "failed" } = { status: "failed" };
+    // n8n's answer counts only by status code; the job id arrives later, in the signed callback.
+    let next: { status: "processing" } | { status: "failed" } = { status: "failed" };
     try {
       const result = await triggerWorkflow({
         event: "quote-request",
@@ -37,7 +38,7 @@ export async function requestQuote(_prevState: QuoteFormState, formData: FormDat
         correlationId: quote.correlationId,
         withCallback: true,
       });
-      if (result.ok) next = { status: "processing", jobId: result.jobId };
+      if (result.ok) next = { status: "processing" };
     } catch (error) {
       // Never leave the quote stuck in "queued": anything unexpected ends as "failed".
       const name = error instanceof Error ? error.name : "Error";

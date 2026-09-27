@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 export type CallbackData = {
   jobId: string;
   status: "completed" | "failed";
-  requestIdempotencyKey?: string;
+  requestIdempotencyKey: string; // our idempotency-key from the request that started the workflow
   result?: unknown;
   error?: unknown;
 };
@@ -14,7 +14,7 @@ export type CallbackData = {
 export const callbackHandlers: Record<string, (data: CallbackData) => Promise<void>> = {
   "quote-request": async (data) => {
     // Find the record by the idempotency key we sent (known before job_id arrives).
-    const quote = data.requestIdempotencyKey ? await db.getQuoteByIdempotencyKey(data.requestIdempotencyKey) : null;
+    const quote = await db.getQuoteByIdempotencyKey(data.requestIdempotencyKey);
     if (!quote) throw new Error("unknown quote");
 
     const documentUrl = safeHttpUrl((data.result as { documentUrl?: unknown } | undefined)?.documentUrl);

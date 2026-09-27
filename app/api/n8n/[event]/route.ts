@@ -90,5 +90,7 @@ function parseCallback(raw: string, event: string): CallbackBody | null {
   const data = body?.data;
   if (body?.version !== 1 || typeof body.event !== "string" || !body.event.startsWith(`${event}.`)) return null;
   if (!data || typeof data.jobId !== "string" || (data.status !== "completed" && data.status !== "failed")) return null;
+  // the handler finds the record by it — a callback without it is malformed (400), not a server error
+  if (typeof data.requestIdempotencyKey !== "string" || !data.requestIdempotencyKey.trim()) return null;
   return body as CallbackBody;
 }

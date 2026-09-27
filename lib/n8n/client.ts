@@ -4,13 +4,13 @@ import { createHash } from "node:crypto";
 export type N8nEvent = "lead-created" | "quote-request";
 
 export type TriggerResult =
-  | { ok: true; status: number; jobId: string | null }
+  | { ok: true; status: number }
   | { ok: false; status: number | null; reason: "misconfigured" | "rejected" | "unavailable" };
 
 const TIMEOUT_MS = 10_000;
 const RETRY_DELAYS_MS = [1_000, 3_000]; // up to 2 retries → 3 attempts
 
-type EnvName = "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BASE_URL";
+type EnvName = "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BASE_URL" | "N8N_CALLBACK_SECRET";
 
 function serverEnv(name: EnvName) {
   const value = process.env[name];
@@ -22,9 +22,15 @@ export function callbackUrlFor(event: N8nEvent) {
   return `${serverEnv("APP_BASE_URL")}/api/n8n/${event}`;
 }
 
-// Missing configuration is not transient: report it once instead of retrying.
+// Missing configuration is not transient: report it once instead of retrying. A workflow that
+// calls back also needs APP_BASE_URL and N8N_CALLBACK_SECRET — without the secret our callback
+// route would answer 401 and the record would stay "processing" forever.
 function readConfig(withCallback: boolean): { missing: EnvName[] } | { baseUrl: string; token: string } {
-  const names: EnvName[] = ["N8N_WEBHOOK_BASE_URL", "N8N_WEBHOOK_TOKEN", ...(withCallback ? ["APP_BASE_URL" as const] : [])];
+  const names: EnvName[] = [
+    "N8N_WEBHOOK_BASE_URL",
+    "N8N_WEBHOOK_TOKEN",
+    ...(withCallback ? (["APP_BASE_URL", "N8N_CALLBACK_SECRET"] as const) : []),
+  ];
   const missing = names.filter((name) => !process.env[name]);
   if (missing.length) return { missing };
   return { baseUrl: serverEnv("N8N_WEBHOOK_BASE_URL"), token: serverEnv("N8N_WEBHOOK_TOKEN") };
@@ -76,11 +82,11 @@ export async function triggerWorkflow<T extends Record<string, unknown>>(options
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       lastStatus = response.status;
-      const text = await response.text(); // status decides; the text is read only for job_id
+      await response.body?.cancel(); // only the status code counts; the body is never read or parsed
       console.info(
         `[n8n] -> ${event} status=${response.status} attempt=${attempt} ms=${Date.now() - started} bytes=${bytes} sha256=${sha} cid=${correlationId}`,
       );
-      if (response.ok) return { ok: true, status: response.status, jobId: readJobId(text) };
+      if (response.ok) return { ok: true, status: response.status };
       if (response.status < 500) return { ok: false, status: response.status, reason: "rejected" }; // 4xx: fix, don't retry
     } catch (error) {
       const name = error instanceof Error ? error.name : "Error"; // TimeoutError / TypeError — no URL, no token
@@ -91,12 +97,3 @@ export async function triggerWorkflow<T extends Record<string, unknown>>(options
   return { ok: false, status: lastStatus, reason: "unavailable" };
 }
 
-function readJobId(text: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(text);
-    const id = (parsed as { job_id?: unknown })?.job_id;
-    return typeof id === "string" ? id : null;
-  } catch {
-    return null;
-  }
-}
