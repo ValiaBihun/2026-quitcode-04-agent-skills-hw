@@ -1,6 +1,9 @@
 # Шаблони коду (Next.js 16, App Router, TypeScript)
 
 Шаблони — відправна точка: імена записів, полів і функцій бази підлаштуйте під проєкт, контракт — ні.
+Функції бази в шаблонах: `db.insertQuote`, `db.getQuoteByIdempotencyKey`, `db.updateQuote(id, patch, onlyIfStatus?)` —
+остання оновлює лише тоді, коли поточний статус дорівнює `onlyIfStatus` (compare-and-set): колбек може
+прийти раніше, ніж `after()` поставить `processing`, і термінальний статус не має перезаписатись.
 Після змін — `scripts/check-contract.mjs`.
 
 ## `lib/n8n/client.ts`
@@ -13,12 +16,14 @@ export type N8nEvent = "lead-created" | "quote-request";
 
 export type TriggerResult =
   | { ok: true; status: number; jobId: string | null }
-  | { ok: false; status: number | null; reason: "rejected" | "unavailable" };
+  | { ok: false; status: number | null; reason: "misconfigured" | "rejected" | "unavailable" };
 
 const TIMEOUT_MS = 10_000;
 const RETRY_DELAYS_MS = [1_000, 3_000]; // up to 2 retries → 3 attempts
 
-function serverEnv(name: "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BASE_URL") {
+type EnvName = "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BASE_URL";
+
+function serverEnv(name: EnvName) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not set`);
   return value;
@@ -26,6 +31,14 @@ function serverEnv(name: "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BAS
 
 export function callbackUrlFor(event: N8nEvent) {
   return `${serverEnv("APP_BASE_URL")}/api/n8n/${event}`;
+}
+
+// Missing configuration is not transient: report it once instead of retrying.
+function readConfig(withCallback: boolean): { missing: EnvName[] } | { baseUrl: string; token: string } {
+  const names: EnvName[] = ["N8N_WEBHOOK_BASE_URL", "N8N_WEBHOOK_TOKEN", ...(withCallback ? ["APP_BASE_URL" as const] : [])];
+  const missing = names.filter((name) => !process.env[name]);
+  if (missing.length) return { missing };
+  return { baseUrl: serverEnv("N8N_WEBHOOK_BASE_URL"), token: serverEnv("N8N_WEBHOOK_TOKEN") };
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,7 +55,12 @@ export async function triggerWorkflow<T extends Record<string, unknown>>(options
   withCallback?: boolean; // async workflows (202 + callback)
 }): Promise<TriggerResult> {
   const { event, idempotencyKey, correlationId } = options;
-  const url = `${serverEnv("N8N_WEBHOOK_BASE_URL")}/${event}`;
+  const config = readConfig(Boolean(options.withCallback));
+  if ("missing" in config) {
+    console.error(`[n8n] -> ${event} not sent: ${config.missing.join(", ")} not set cid=${correlationId}`);
+    return { ok: false, status: null, reason: "misconfigured" };
+  }
+  const url = `${config.baseUrl}/${event}`;
   const payload = JSON.stringify({
     version: 1,
     event,
@@ -60,7 +78,7 @@ export async function triggerWorkflow<T extends Record<string, unknown>>(options
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-n8n-token": serverEnv("N8N_WEBHOOK_TOKEN"),
+          "x-n8n-token": config.token,
           "idempotency-key": idempotencyKey,
           "x-correlation-id": correlationId,
         },
@@ -122,12 +140,34 @@ export async function releaseKey(key: string): Promise<void> {
 ```ts
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { claimKey, releaseKey } from "@/lib/n8n/idempotency";
-import { callbackHandlers } from "@/lib/n8n/callbacks";
+import { callbackHandlers, type CallbackData } from "@/lib/n8n/callbacks";
+
+// Callback from n8n when a workflow result is ready. Public endpoint: we trust only the signature.
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_SKEW_SECONDS = 300;
 
 const reply = (status: number, body: Record<string, unknown> = {}) => Response.json(body, { status });
+
+// Route Handlers have no body-size limit of their own, and request.text() would buffer the
+// whole body first. Read the raw bytes ourselves and stop as soon as the limit is passed.
+async function readRawBody(request: Request, maxBytes: number): Promise<string | null> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 function signatureMatches(timestamp: string, raw: string, header: string | null) {
   const secret = process.env.N8N_CALLBACK_SECRET;
@@ -139,14 +179,14 @@ function signatureMatches(timestamp: string, raw: string, header: string | null)
 
 export async function POST(request: Request, ctx: RouteContext<"/api/n8n/[event]">) {
   const { event } = await ctx.params;
-  const handler = callbackHandlers[event];
+  const handler = Object.hasOwn(callbackHandlers, event) ? callbackHandlers[event] : undefined;
   if (!handler) return reply(404, { error: "unknown event" }); // 1
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     return reply(415, { error: "unsupported media type" });
   }
 
-  const raw = await request.text(); // 2 — raw bytes; never request.json() here
-  if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return reply(413, { error: "payload too large" }); // 3
+  const raw = await readRawBody(request, MAX_BODY_BYTES); // 2+3 — raw bytes, at most 64 KiB; never request.json()
+  if (raw === null) return reply(413, { error: "payload too large" });
 
   const timestamp = request.headers.get("x-n8n-timestamp") ?? "";
   const skew = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
@@ -159,6 +199,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/n8n/[event]
   if (!key) return reply(400, { error: "bad request" });
   if (!(await claimKey(key))) return reply(200, { duplicate: true }); // 6
 
+  const cid = request.headers.get("x-correlation-id") ?? "-";
   try {
     const body = parseCallback(raw, event); // 7 — only now
     if (!body || key !== `${body.data.jobId}:${body.event}`) {
@@ -168,19 +209,15 @@ export async function POST(request: Request, ctx: RouteContext<"/api/n8n/[event]
     await handler(body.data); // 8 — persist BEFORE answering
   } catch {
     await releaseKey(key);
+    console.warn(`[n8n] <- ${event} status=500 bytes=${Buffer.byteLength(raw)} cid=${cid}`);
     return reply(500, { error: "internal error" });
   }
 
-  const cid = request.headers.get("x-correlation-id") ?? "-";
   console.info(`[n8n] <- ${event} status=202 bytes=${Buffer.byteLength(raw)} cid=${cid}`);
-  return reply(202, { ok: true }); // 9 — slow follow-ups (emails…) go into after()
+  return reply(202, { ok: true }); // 9 — slow follow-ups (emails…) would go into after()
 }
 
-type CallbackBody = {
-  version: 1;
-  event: string;
-  data: { jobId: string; status: "completed" | "failed"; requestIdempotencyKey?: string; result?: unknown; error?: unknown };
-};
+type CallbackBody = { version: 1; event: string; data: CallbackData };
 
 function parseCallback(raw: string, event: string): CallbackBody | null {
   let parsed: unknown;
@@ -203,21 +240,42 @@ function parseCallback(raw: string, event: string): CallbackBody | null {
 import "server-only";
 import { db } from "@/lib/db";
 
-type CallbackData = { jobId: string; status: "completed" | "failed"; requestIdempotencyKey?: string; result?: unknown };
+export type CallbackData = {
+  jobId: string;
+  status: "completed" | "failed";
+  requestIdempotencyKey?: string;
+  result?: unknown;
+  error?: unknown;
+};
 
+// One handler per event. It only persists state — no side effects outside the DB.
+// Throwing → 500, the idempotency key is released and n8n's Retry On Fail can try again.
 export const callbackHandlers: Record<string, (data: CallbackData) => Promise<void>> = {
   "quote-request": async (data) => {
-    // find the record by the idempotency key we sent (known before job_id arrives)
+    // Find the record by the idempotency key we sent (known before job_id arrives).
     const quote = data.requestIdempotencyKey ? await db.getQuoteByIdempotencyKey(data.requestIdempotencyKey) : null;
-    if (!quote) throw new Error("unknown quote"); // → 500, key released, n8n retries
-    const documentUrl = (data.result as { documentUrl?: unknown } | undefined)?.documentUrl;
+    if (!quote) throw new Error("unknown quote");
+
+    const documentUrl = safeHttpUrl((data.result as { documentUrl?: unknown } | undefined)?.documentUrl);
+    const ready = data.status === "completed" && documentUrl !== null;
     await db.updateQuote(quote.id, {
-      status: data.status === "completed" ? "ready" : "failed",
+      status: ready ? "ready" : "failed",
       jobId: data.jobId,
-      documentUrl: typeof documentUrl === "string" ? documentUrl : null,
+      documentUrl: ready ? documentUrl : null,
     });
   },
 };
+
+// The link is rendered as <a href>, so accept only http(s) — never javascript: or data:.
+function safeHttpUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
 ```
 
 ## Server Action, що запускає воркфлоу
@@ -225,42 +283,54 @@ export const callbackHandlers: Record<string, (data: CallbackData) => Promise<vo
 ```ts
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { triggerWorkflow } from "@/lib/n8n/client";
 import { db } from "@/lib/db";
+import { triggerWorkflow } from "@/lib/n8n/client";
+import { parseQuoteForm, type QuoteFormField, type QuoteFormValues } from "@/lib/quote-form";
 
 export type QuoteFormState =
   | { status: "idle" }
-  | { status: "invalid"; errors: Record<string, string> }
+  | { status: "invalid"; errors: Partial<Record<QuoteFormField, string>>; values: QuoteFormValues }
   | { status: "ok"; id: string };
 
-export async function requestQuote(_prev: QuoteFormState, formData: FormData): Promise<QuoteFormState> {
-  // Server Action = public POST endpoint (server-auth-actions): session/permission checks here;
-  // a public website form skips the session check deliberately — say so in a comment.
-  const parsed = parseQuoteForm(formData); // validate everything on the server
-  if (!parsed.ok) return { status: "invalid", errors: parsed.errors };
+export async function requestQuote(_prevState: QuoteFormState, formData: FormData): Promise<QuoteFormState> {
+  // Public client-facing form, like the lead form on "/": no session check on purpose.
+  // Everything is validated here on the server — the action is a public POST endpoint.
+  const parsed = parseQuoteForm(formData);
+  if (!parsed.ok) return { status: "invalid", errors: parsed.errors, values: parsed.values };
 
-  const quote = await db.insertQuote({
-    ...parsed.data,
-    status: "queued",
-    idempotencyKey: randomUUID(), // once per operation, stored with the record
-    correlationId: randomUUID(),
-  });
+  // Stored as "queued" with its idempotencyKey/correlationId before n8n is ever called.
+  const quote = await db.insertQuote(parsed.data);
 
-  // The user never waits for n8n (server-after-nonblocking).
+  // The workflow takes 40–90 s: the user never waits for n8n. n8n answers 202 {job_id}
+  // right away and calls /api/n8n/quote-request when the PDF is ready.
   after(async () => {
-    const result = await triggerWorkflow({
-      event: "quote-request",
-      data: { quoteId: quote.id, company: quote.company, budget: quote.budget }, // minimum only
-      idempotencyKey: quote.idempotencyKey,
-      correlationId: quote.correlationId,
-      withCallback: true,
-    });
-    await db.updateQuote(quote.id, result.ok ? { status: "processing", jobId: result.jobId } : { status: "failed" });
+    let next: { status: "processing"; jobId: string | null } | { status: "failed" } = { status: "failed" };
+    try {
+      const result = await triggerWorkflow({
+        event: "quote-request",
+        // Minimum for the PDF: no email, IP or user agent.
+        data: {
+          quoteId: quote.id,
+          company: quote.company,
+          description: quote.description,
+          budget: quote.budget,
+        },
+        idempotencyKey: quote.idempotencyKey,
+        correlationId: quote.correlationId,
+        withCallback: true,
+      });
+      if (result.ok) next = { status: "processing", jobId: result.jobId };
+    } catch (error) {
+      // Never leave the quote stuck in "queued": anything unexpected ends as "failed".
+      const name = error instanceof Error ? error.name : "Error";
+      console.error(`[n8n] -> quote-request crashed=${name} cid=${quote.correlationId}`);
+    }
+    // Only from "queued": a fast callback may already have set "ready" / "failed".
+    await db.updateQuote(quote.id, next, "queued");
   });
 
-  return { status: "ok", id: quote.id }; // not the DB row
+  return { status: "ok", id: quote.id };
 }
 ```
 

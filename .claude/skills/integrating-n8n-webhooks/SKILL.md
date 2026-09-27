@@ -48,8 +48,8 @@ app/api/n8n/[event]/route.ts ◀── POST, x-n8n-timestamp + x-n8n-signature �
    (`server-after-nonblocking`). Воркфлоу, що може тривати ≥ 100 с або тривалість невідома, — лише
    асинхронно: 202 + колбек. → [references/contract.md](references/contract.md#3-режим-відповіді)
 6. **Колбек** `app/api/n8n/[event]/route.ts`, порядок саме такий: невідома подія → 404; не JSON →
-   415; `const raw = await request.text()` (ніякого `request.json()` чи `JSON.parse` до підпису);
-   > 64 КБ → 413; `x-n8n-timestamp` поза ±300 с → 401; HMAC-SHA256 від `` `${ts}.${raw}` `` через
+   415; сирі байти тіла потоком з обмеженням 64 КБ (`readRawBody`; ніякого `request.json()` чи
+   `JSON.parse` до підпису) → більше 64 КБ — 413; `x-n8n-timestamp` поза ±300 с → 401; HMAC-SHA256 від `` `${ts}.${raw}` `` через
    `timingSafeEqual` (спершу довжини; не `===`) → 401; «застовпити» `idempotency-key` → вже був:
    200 `{"duplicate":true}`; `JSON.parse` + перевірка форми, `idempotency-key` ===
    `` `${data.jobId}:${event}` `` з тіла → інакше 400 і звільнити ключ; зберегти стан **до**
@@ -69,7 +69,7 @@ app/api/n8n/[event]/route.ts ◀── POST, x-n8n-timestamp + x-n8n-signature �
 - [ ] 3. Кожен виклик: x-n8n-token, idempotency-key (збережений із записом), x-correlation-id, конверт version/event/data.
 - [ ] 4. AbortSignal.timeout(10_000); повтори лише на мережу/таймаут/5xx/524, той самий ключ.
 - [ ] 5. Server Action повертає { status, id }, виклик n8n — в after(); довгий воркфлоу — 202 + колбек.
-- [ ] 6. Колбек: 404/415 → text() → 413 → час ±300 с → timingSafeEqual → ключ → JSON.parse і звірка ключа з тілом → запис → 202.
+- [ ] 6. Колбек: 404/415 → сирі байти з лімітом 64 КБ (інакше 413) → час ±300 с → timingSafeEqual → ключ → JSON.parse і звірка ключа з тілом → запис → 202.
 - [ ] 7. Після claim і збою обробки ключ звільняється.
 - [ ] 8. У журналах немає тіл, персональних даних і секретів.
 - [ ] 9. .env.example: N8N_WEBHOOK_BASE_URL=…/webhook, N8N_WEBHOOK_TOKEN і N8N_CALLBACK_SECRET = change-me-…, APP_BASE_URL.
