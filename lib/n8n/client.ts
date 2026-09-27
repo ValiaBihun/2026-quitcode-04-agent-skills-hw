@@ -5,7 +5,7 @@ export type N8nEvent = "lead-created" | "quote-request";
 
 export type TriggerResult =
   | { ok: true; status: number }
-  | { ok: false; status: number | null; reason: "misconfigured" | "rejected" | "unavailable" };
+  | { ok: false; status: number | null; reason: "misconfigured" | "rejected" | "no-callback" | "unavailable" };
 
 const TIMEOUT_MS = 10_000;
 const RETRY_DELAYS_MS = [1_000, 3_000]; // up to 2 retries → 3 attempts
@@ -86,7 +86,10 @@ export async function triggerWorkflow<T extends Record<string, unknown>>(options
       console.info(
         `[n8n] -> ${event} status=${response.status} attempt=${attempt} ms=${Date.now() - started} bytes=${bytes} sha256=${sha} cid=${correlationId}`,
       );
-      if (response.ok) return { ok: true, status: response.status };
+      // With a callback only 202 (Respond to Webhook) means "started, result follows". A plain 200
+      // means the run ended without reaching Respond to Webhook — no callback will ever come.
+      if (options.withCallback ? response.status === 202 : response.ok) return { ok: true, status: response.status };
+      if (response.ok) return { ok: false, status: response.status, reason: "no-callback" }; // 2xx, but not 202
       if (response.status < 500) return { ok: false, status: response.status, reason: "rejected" }; // 4xx: fix, don't retry
     } catch (error) {
       const name = error instanceof Error ? error.name : "Error"; // TimeoutError / TypeError — no URL, no token
