@@ -123,6 +123,7 @@ POST /webhook/lead-created -> 200 in 2004 ms auth=none idempotency=absent | head
 |---|---|---|---|---|---|---|
 | `async-parallel` | `948412b` | `app/dashboard/page.tsx` | `getLeads`, `getLeadStats`, `getSourceBreakdown` залежать лише від `workspace.id` — тепер ідуть разом через `Promise.all` замість трьох послідовних `await` | TTFB `/dashboard` **2,27 с** (2,262–2,280, 5 прогонів) | **1,44 с** (1,429–1,449, 5 прогонів) | `curl` вище, продакшн-збірка, після кожної збірки — перезапуск `npm start` |
 | `server-cache-react` | `f1684de` | `lib/data.ts` + 4 місця виклику `getWorkspace` | `getCurrentUser` загорнуто в `cache()`; `getWorkspace` приймає рядок `slug` замість нового об'єкта `{ slug }`, з яким кеш ніколи не збігався (`Object.is`) | `db:` на один `GET /dashboard`: `getUserBySession` ×3, `getWorkspace` ×3 | ×1 і ×1 | (без заміру часу) приріст лічильників `db:` у журналі `npm start` за один `curl` |
+| `server-auth-actions` | `0507d25` | `app/actions.ts` | `updateLeadStatus` і `deleteLead` тепер самі перевіряють сесію (`getCurrentUser()`), що лід належить workspace користувача, і статус проти `LEAD_STATUSES`; повертають лише `{ status }` | будь-хто, хто знає `lead_…`, міг змінити статус чи видалити будь-який лід | без сесії / з чужим лідом / з вигаданим статусом — нічого не змінюється | (без заміру часу) прямий виклик дій за `Next-Action`, див. нижче |
 
 Сирий вивід після `async-parallel`:
 
@@ -144,14 +145,29 @@ TTFB 1.428993s, total 1.429588s
   переконались, що не зламали: без cookie `/dashboard` → 307 на `/login` (proxy), з невідомою
   сесією → 307 (`redirect()` усередині `cache()`), `/dashboard/leads/lead_0023` → 200 з ім'ям
   ліда; у браузері дашборд показує 172 рядки й картки статистики.
-- Поради скіла, звірені з документацією Next.js 16 і **поки не** застосовані:
+- Поради скіла, звірені з документацією Next.js 16 і **не** застосовані в Task A:
   - `server-after-nonblocking` для форми — `after()` у Next.js 16 є (`node_modules/next/dist/docs/01-app/03-api-reference/04-functions/after.md`),
     але виклик n8n з форми за інструкцією переробляємо за контрактом у Task D; зараз не чіпаємо,
     щоб не змішувати зміни;
   - `bundle-dynamic-imports` для `recharts` / `exceljs` — застосовна (`next/dynamic` і `import()` у
     клієнтському компоненті), лишили на потім: двох виправлень для Task A досить;
-  - `server-auth-actions` (`app/actions.ts:68-77`, дії без перевірки сесії) — справжня діра, але це
-    патерн форми з Task B; окремо фіксуємо тут як знахідку.
+- Третє виправлення, `server-auth-actions` (`0507d25`, зроблене вже після Task D, перед здачею):
+  знахідку з рев'ю вище (`app/actions.ts:68-77`, дії без перевірки сесії) бачили й агент у Task B, і
+  наш скіл `building-client-form` вимагає такої перевірки. Порада звірена з Next.js 16
+  (`01-app/02-guides/data-security.md`, «Authentication and authorization»: Server Actions — публічні
+  ендпоінти, перевіряти права всередині). Як переконались, що працює й не зламали (продакшн-збірка,
+  дії викликано напряму заголовком `Next-Action`, як це зробив би сторонній клієнт):
+
+  | Виклик | Результат | `db:updateLeadStatus` / `db:deleteLead` |
+  |---|---|---|
+  | без сесії, `update` і `delete` свого ліда (через `/dashboard`) | 307 → `/login` (proxy) | не викликались |
+  | вигадана сесія `forged-session`, `update` через `/login` (повз proxy) | `x-action-redirect: /login;push` від `getCurrentUser()` у самій дії | не викликались |
+  | сесія Olena, `update` і `delete` ліда іншого workspace (`lead_0007`) | `{"status":"error"}` | не викликались |
+  | сесія Olena, свій лід, статус `hacked` | `{"status":"error"}`, статус лишився `new` | не викликались |
+  | сесія Olena, свій лід, статус `contacted` | `{"status":"ok"}`, статус `contacted` | 1 |
+  | браузер: сторінка ліда `lead_0024`, зміна статусу в `select` | після перезавантаження — «Контакт» | 2 |
+
+  `npm run lint`, `npm run build`, `check-contract.mjs` (0 FAIL) — без помилок.
 - Якщо виміряне виправлення не змінило чисел — змінило: 2,27 с → 1,44 с.
 - `npm run lint`, `npm run build` після кожного виправлення: без помилок.
 
