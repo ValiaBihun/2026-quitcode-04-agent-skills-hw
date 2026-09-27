@@ -22,7 +22,7 @@ Options:
 Checks (each prints PASS or FAIL; FAIL lists file:line):
   C1   No test webhook URL (/webhook-test/) in code or .env.example
   C2   No N8N_* variable with the NEXT_PUBLIC_ prefix
-  C3   n8n webhook env vars are read only in lib/n8n/client.ts
+  C3   N8N_* env vars (except N8N_CALLBACK_SECRET) are read only in lib/n8n/client.ts
   C4   lib/n8n/client.ts exists for every n8n call and starts with import 'server-only'
   C5   Every fetch to n8n has a timeout (signal: AbortSignal.timeout(...))
   C6   Every n8n call sends x-n8n-token, idempotency-key and x-correlation-id
@@ -32,6 +32,10 @@ Checks (each prints PASS or FAIL; FAIL lists file:line):
   C10  No export const runtime = 'edge'
   C11  .env.example: contract keys present, secrets are change-me-..., base URL ends in /webhook
   C12  No request bodies or personal data in console.* of n8n-related files
+  C13  In "use server" files every n8n call runs inside after() — the user never waits for n8n
+
+Callback routes (C7–C9) are app/**/route.* files with x-n8n-signature / N8N_CALLBACK_SECRET,
+or a POST handler whose path or code mentions n8n / webhook / callback / signature.
 
 Exit code: 0 — no FAIL; 1 — at least one FAIL; 2 — usage or git error.
 `;
@@ -42,7 +46,10 @@ const SKIP_DIRS = new Set([
   "tools", "docs", "materials", "coverage", "out", "build", "dist",
 ]);
 const CLIENT_MODULE = "lib/n8n/client.ts";
-const WEBHOOK_ENV_RE = /process\.env\.(N8N_WEBHOOK_(?:BASE_URL|URL|TOKEN))|\bN8N_WEBHOOK_(?:BASE_URL|URL|TOKEN)\b/g;
+// Any N8N_* name except the callback secret (which the callback route reads): the contract's
+// N8N_WEBHOOK_BASE_URL / N8N_WEBHOOK_TOKEN, the old N8N_WEBHOOK_URL, or a name an author invented
+// (N8N_QUOTE_WEBHOOK_URL…). NEXT_PUBLIC_N8N_* does not match here (no word boundary) — that is C2.
+const WEBHOOK_ENV_RE = /\bN8N_(?!CALLBACK_SECRET\b)[A-Z0-9_]+\b/g;
 const REQUIRED_ENV = ["N8N_WEBHOOK_BASE_URL", "N8N_WEBHOOK_TOKEN", "N8N_CALLBACK_SECRET", "APP_BASE_URL"];
 const SECRET_ENV = ["N8N_WEBHOOK_TOKEN", "N8N_CALLBACK_SECRET"];
 
@@ -204,13 +211,25 @@ function n8nFetches(file, text) {
   for (const m of text.matchAll(/\bfetch\s*\(/g)) {
     const open = m.index + m[0].length - 1;
     const argsText = callArgs(text, open);
-    if (all || /N8N_|n8n|\/webhook/.test(argsText)) out.push({ line: lineOf(text, m.index), argsText });
+    if (all || /N8N_|n8n|\/webhook/.test(argsText)) out.push({ line: lineOf(text, m.index), index: m.index, argsText });
   }
   return out;
 }
 
-const isCallbackRoute = (file, text) =>
-  /(^|\/)app\/.*\/route\.(ts|js|mjs)$/.test(file) && /x-n8n-signature|N8N_CALLBACK_SECRET/.test(text);
+// A Route Handler that n8n calls back. Recognised by the contract names, but also by a path or
+// code that says n8n / webhook / callback — so a callback that ignores the contract's header and
+// variable names is still checked, not skipped. A route that only *calls* n8n (no POST handler
+// reading a request, no signature/secret) is not a callback.
+function isCallbackRoute(file, text) {
+  if (!/(^|\/)app\/.*\/route\.(ts|js|mjs)$/.test(file)) return false;
+  if (/x-n8n-signature|N8N_CALLBACK_SECRET/.test(text)) return true;
+  if (!/export\s+(async\s+)?(function\s+POST\b|const\s+POST\b)/.test(text)) return false;
+  if (/signature|secret|hmac/i.test(text)) return true; // a POST handler that verifies something
+  if (/callback/i.test(file)) return true;
+  // a route that starts a workflow (fetch to n8n or an import from an n8n module) is not a callback
+  const callsN8n = n8nFetches(file, text).length > 0 || /from\s*["'][^"']*n8n[^"']*["']/i.test(text);
+  return !callsN8n && (/n8n|webhook/i.test(file) || /x-n8n-|\bn8n\b/i.test(text));
+}
 
 const n8nRelated = (file, text) =>
   file === CLIENT_MODULE || usesWebhookEnv(text) || isCallbackRoute(file, text) || n8nFetches(file, text).length > 0;
@@ -248,11 +267,11 @@ check("C2", "No N8N_* variable with the NEXT_PUBLIC_ prefix", (report) => {
   }
 });
 
-check("C3", `n8n webhook env vars are read only in ${CLIENT_MODULE}`, (report) => {
+check("C3", `N8N_* env vars (except N8N_CALLBACK_SECRET) are read only in ${CLIENT_MODULE}`, (report) => {
   for (const [file, text] of files) {
     if (file === CLIENT_MODULE) continue;
     for (const m of text.matchAll(WEBHOOK_ENV_RE)) {
-      report(file, lineOf(text, m.index), `${m[1] ?? m[0]} outside ${CLIENT_MODULE}`);
+      report(file, lineOf(text, m.index), `${m[0]} outside ${CLIENT_MODULE}`);
     }
   }
 });
@@ -304,7 +323,7 @@ check("C6", "Every n8n call sends x-n8n-token, idempotency-key and x-correlation
 });
 
 const callbackRoutes = [...files].filter(([file, text]) => isCallbackRoute(file, text));
-const noRoutes = "(n/a: no callback route with x-n8n-signature / N8N_CALLBACK_SECRET)";
+const noRoutes = "(n/a: no callback route found under app/**/route.*)";
 
 check("C7", "Callback route reads the raw body; no .json() / JSON.parse before the signature check", (report) => {
   for (const [file, text] of callbackRoutes) {
@@ -312,7 +331,8 @@ check("C7", "Callback route reads the raw body; no .json() / JSON.parse before t
       report(file, lineOf(text, m.index), "request body parsed with .json() — the signature needs the raw bytes");
     }
     if (!/\.text\s*\(\s*\)|\.arrayBuffer\s*\(\s*\)/.test(text)) report(file, 0, "raw body is never read (.text() / .arrayBuffer())");
-    const verify = text.search(/timingSafeEqual/);
+    // first place the signature is checked: timingSafeEqual itself or a helper that wraps it
+    const verify = text.search(/timingSafeEqual|\bverify\w*\s*\(|\bsignature\w*\s*\(/i);
     for (const m of text.matchAll(/JSON\.parse\s*\(/g)) {
       if (verify === -1 || m.index < verify) report(file, lineOf(text, m.index), "JSON.parse before the signature is verified");
     }
@@ -324,7 +344,7 @@ check("C8", "Callback signature compared with crypto.timingSafeEqual, never === 
   for (const [file, text] of callbackRoutes) {
     if (!/timingSafeEqual/.test(text)) report(file, 0, "no crypto.timingSafeEqual");
     text.split("\n").forEach((line, i) => {
-      if (/[!=]==?/.test(line) && /signature|digest|hmac|expected/i.test(line) &&
+      if (/[!=]==?/.test(line) && /signature|digest|hmac|expected|secret|token/i.test(line) &&
           !/\.length|typeof|null|undefined|startsWith/.test(line) && /[!=]==/.test(line)) {
         report(file, i + 1, "signature compared with ===/!==");
       }
@@ -384,6 +404,39 @@ check("C12", "No request bodies or personal data in console.* of n8n-related fil
       if (bad) report(file, lineOf(text, m.index), `console.${m[1]} logs "${bad[0]}"`);
     }
   }
+});
+
+check("C13", 'In "use server" files every n8n call runs inside after() — the user never waits for n8n', (report) => {
+  let actions = 0;
+  for (const [file, text] of files) {
+    if (!/^\s*["']use server["']/m.test(text)) continue;
+    // names imported from an n8n module (lib/n8n/client, lib/n8n, ./n8n …)
+    const names = new Set();
+    for (const m of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*["']([^"']*n8n[^"']*)["']/gi)) {
+      for (const part of m[1].split(",")) {
+        const name = part.trim().split(/\s+as\s+/).pop();
+        if (name && !name.startsWith("type ")) names.add(name);
+      }
+    }
+    const calls = n8nFetches(file, text).map((f) => ({ line: f.line, index: f.index, what: "fetch to n8n" }));
+    for (const name of names) {
+      for (const m of text.matchAll(new RegExp(`\\b${name}\\s*\\(`, "g"))) {
+        calls.push({ line: lineOf(text, m.index), index: m.index, what: `${name}()` });
+      }
+    }
+    if (!calls.length) continue;
+    actions++;
+    const afterRanges = [...text.matchAll(/\bafter\s*\(/g)].map((m) => {
+      const open = m.index + m[0].length - 1;
+      return [open, open + callArgs(text, open).length + 1];
+    });
+    for (const call of calls) {
+      if (!afterRanges.some(([from, to]) => call.index > from && call.index < to)) {
+        report(file, call.line, `${call.what} is awaited in the Server Action instead of inside after()`);
+      }
+    }
+  }
+  return actions ? "" : '(n/a: no n8n calls in "use server" files)';
 });
 
 // ---------------------------------------------------------------------------

@@ -106,6 +106,6 @@ app/api/n8n/[event]/route.ts ◀── POST, x-n8n-timestamp + x-n8n-signature �
 - [references/callback.md](references/callback.md) — обробка колбека крок за кроком і чому саме так; ідемпотентність з обох боків.
 - [references/code-templates.md](references/code-templates.md) — шаблони `lib/n8n/client.ts`, `lib/n8n/idempotency.ts`, колбек-роуту, Server Action, `.env.example`.
 - [references/n8n-setup.md](references/n8n-setup.md) — що налаштувати в n8n (текстом), відомі пастки, реєстр інтеграцій.
-- `scripts/check-contract.mjs` — статична перевірка C1–C12; `--root <тека>`, `--changed-since <ref>`, `--help`; код виходу 1 при FAIL.
+- `scripts/check-contract.mjs` — статична перевірка C1–C13; `--root <тека>`, `--changed-since <ref>`, `--help`; код виходу 1 при FAIL.
 - `scripts/send-signed-callback.mjs` — матриця підписаних колбеків проти запущеного застосунку з очікуваним кодом на кожен випадок; `--help`.
 - `scripts/mock-n8n.mjs` — офлайн-мок n8n (Webhook, Header Auth, 202, підписаний колбек); `--help`.
