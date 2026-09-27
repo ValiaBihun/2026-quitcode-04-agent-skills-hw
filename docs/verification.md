@@ -86,8 +86,38 @@ POST /webhook/lead-created -> 200 in 2004 ms auth=none idempotency=absent | head
 
 (insertLead 120 мс + очікування n8n 2004 мс + insertAuditEntry 250 мс — усе до відповіді користувачу.)
 
-Рев'ю зроблено в новій сесії запитом з інструкції («Зроби рев'ю app/, components/, lib/ за скілом
-vercel-react-best-practices… Файли не змінюй.») — 17 рядків таблиці з id правил. Застосовано два:
+Рев'ю зроблено в новій сесії запитом з інструкції:
+
+> Зроби рев'ю app/, components/, lib/ за скілом vercel-react-best-practices. Для кожної проблеми —
+> рядок таблиці: файл:рядок | id правила | що не так | виправлення для Next.js 16. Файли не змінюй.
+
+Відповідь агента (файлів не змінював; затримки — з `lib/db.ts:25-38`; рядки за пріоритетом правил):
+
+| файл:рядок | id правила | що не так | виправлення для Next.js 16 |
+|---|---|---|---|
+| `app/dashboard/page.tsx:14-18` | `async-parallel` / `server-parallel-fetching` | П'ять `await` один за одним: 100+100+400+1200+400 ≈ 2,2 с; `getLeads`, `getLeadStats`, `getSourceBreakdown` незалежні | Після `user` і `workspace` — `Promise.all([getLeads(id), getLeadStats(id), getSourceBreakdown(id)])` |
+| `app/dashboard/page.tsx:17` | `async-suspense-boundaries` | `getLeadStats` (1200 мс) тримає всю сторінку, хоча таблиця готова за 400 мс | Async-компонент `<Stats>` у `<Suspense fallback={<StatsSkeleton/>}>`; `app/dashboard/loading.tsx` для першого кадру |
+| `components/leads-toolbar.tsx:4` | `bundle-conditional` / `bundle-dynamic-imports` | `exceljs` (~1 МБ) статично в клієнтському бандлі, хоча потрібен лише після кліку «Експорт» | `const { default: ExcelJS } = await import("exceljs")` у `handleExport`; за бажанням прелоад на `onMouseEnter`/`onFocus` (`bundle-preload`) |
+| `components/leads-toolbar.tsx:6` | `bundle-dynamic-imports` | `SourcesChart` тягне `recharts` у початковий бандл, хоча графік схований; `optimizePackageImports` лише прибирає зайві модулі, а не відкладає завантаження | `dynamic(() => import("./sources-chart").then(m => m.SourcesChart), { ssr: false, loading: … })` з `next/dynamic` |
+| `components/lead-search.tsx:5` | `bundle-barrel-imports` | `import { debounce } from "lodash"` тягне весь CommonJS-пакет; у дефолтному `optimizePackageImports` лише `lodash-es` | `import debounce from "lodash/debounce"` або прибрати lodash (див. `useDeferredValue` нижче) |
+| `app/actions.ts:68-77` | `server-auth-actions` | `updateLeadStatus`/`deleteLead` — публічні POST-ендпоінти без перевірки сесії й належності ліда до workspace; `status` не перевіряється | На початку дії: `getCurrentUser()` → `getWorkspace(…)` → `getLead(id)`, `if (!lead \|\| lead.workspaceId !== ws.id) throw …`; `LEAD_STATUSES.includes(status)` |
+| `lib/data.ts:7` | `server-cache-react` | `getCurrentUser` не в `cache()`; його викликають layout, `DashboardHeader` і page — 3× `getUserBySession` | `export const getCurrentUser = cache(async () => { … })`; `redirect()` усередині працює |
+| `lib/data.ts:18` | `server-cache-react` | `cache(async ({ slug }) => …)` отримує щоразу новий об'єкт — `Object.is` не збігається, кеш не спрацьовує: 3× `getWorkspace` | Приймати примітив: `cache(async (slug: string) => …)`, виклик `getWorkspace(user.workspaceSlug)` |
+| `app/actions.ts:53-63` | `server-after-nonblocking` | Вебхук n8n і `logAudit` (250 мс) виконуються до відповіді користувачу | `after(async () => { await Promise.allSettled([fetch(…), logAudit(…)]) })` з `next/server`, одразу `return { status: "ok" }` |
+| `app/dashboard/page.tsx:32` → `components/leads-table.tsx:12` | `server-serialization` | У клієнтський компонент іде повний `Lead[]` з `rawPayload`, `ipAddress`, `userAgent`, `internalNotes`, `message`, `tags`; таблиці треба 5 полів | На сервері `leads.map(({ id, fullName, company, status, createdAt }) => …)`, тип `LeadRow` у `LeadsTable` |
+| `components/lead-search.tsx:20-24` | `client-swr-dedup` / `server-dedup-props` | Після гідрації ще раз вантажить `/api/leads`, хоча page уже має ліди; `leads-toolbar.tsx:26` робить той самий запит (≈600 мс); помилки не обробляються | Передати мінімальні рядки з page як проп; якщо клієнтський запит потрібен — спільний `useSWR("/api/leads")` |
+| `components/lead-search.tsx:18,43-45` | `rerender-derived-state-no-effect` / `rerender-use-deferred-value` | `filtered` у стейті, оновлюється з ефекту через debounce: зайвий рендер і 250 мс затримки; debounce не скасовується при unmount | `useDeferredValue(query)` + `useMemo` для `filtered`, без обох ефектів |
+| `app/dashboard/leads/[id]/page.tsx:12-16` | `async-api-routes` | `getLead(id)` не залежить від `user`, але стартує після `await getCurrentUser()` | `const leadPromise = getLead(id)` одразу після `await params`, потім `Promise.all` |
+| `components/leads-table.tsx:17` | `js-tosorted-immutable` | `[...leads].sort(…)` на кожному рендері | `leads.toSorted(…)`, для великих списків — у `useMemo` |
+| `components/leads-table.tsx:24`, `components/leads-toolbar.tsx:72` | `rerender-functional-setstate` | `setDescending(!descending)`, `setShowChart(!showChart)` беруть значення із замикання | `setDescending(d => !d)`, `setShowChart(s => !s)` |
+| `components/leads-table.tsx:56-58` | `bundle-preload` | Перехід через `router.push` в `onClick` рядка: немає prefetch, рядок недоступний з клавіатури | `<Link href={…}>` на імені чи клітинці |
+| `lib/db.ts:334-338` | `js-combine-iterations` | `getSourceBreakdown` проходить `store.leads` 6 разів (і `getLeadStats` — кілька); це мок БД, пріоритет низький | Один цикл з `Record<LeadSource, number>` |
+
+Поза правилами скіла агент також помітив: у `components/lead-actions.tsx:15-18` після
+`updateLeadStatus` (який уже викликає `revalidatePath`) зайвий `router.refresh()`, і стан не
+відкочується, якщо дія впала (для цього є `useOptimistic`).
+
+Застосовано два з цих рядків:
 
 | Правило (id) | Коміт | Файли | Що змінилось | Було (`main`) | Стало | Як міряли |
 |---|---|---|---|---|---|---|
