@@ -239,7 +239,12 @@ TTFB 1.428993s, total 1.429588s
 - SHA коміту зі скілом (BASE для Task D): **`ff395fb`** (`skills(n8n): make check-contract catch
   code that ignores the contract names`). Перший коміт скіла — `5fd64c0`; до прогонів скрипт
   посилили (див. нижче «Перевірка на коді з іншими назвами»), тож BASE — другий коміт.
-- Що скіл змінив у собі після прогонів (коміти й чому): поки нічого (прогонів ще не було).
+- Що скіл змінив у собі після прогонів (коміти й чому): `18a7ea0 fix(skills/n8n): check-contract
+  reads CRLF files` — агент у прогоні B помітив, що C11 «не бачить» ключів, які він щойно додав:
+  на Windows-копії (`core.autocrlf=true`) `.env.example` має CRLF, і регулярка рядка не збігалась.
+  Стара версія пропускала й справжній токен у такому файлі (перевірено: `N8N_WEBHOOK_TOKEN=real-token`
+  з CRLF → C11 PASS до виправлення, FAIL після). Тепер скрипт нормалізує переноси рядків; заодно
+  переписано два цикли, на які скаржився ESLint. Код прогонів A і B міряли вже виправленою версією.
 
 `check-contract.mjs`: Node без залежностей (`node:fs`, `node:path`, `node:child_process`,
 `node:util`), 13 перевірок C1–C13 з PASS/FAIL, для FAIL — `файл:рядок`, код виходу 1 при FAIL
@@ -340,10 +345,26 @@ C13  FAIL  app/quote-actions.ts:4  startQuote() is awaited in the Server Action 
 Шаблони скіла після виправлення — як і раніше 0 FAIL (13 PASS); тимчасовий роут, що лише
 запускає воркфлоу, колбеком не вважається.
 
-**`check-contract.mjs` на фінальному коді** (після перенесення прогону B — 0 FAIL):
+**`check-contract.mjs` на фінальному коді** (після перенесення прогону B — `8c78fdd` — і доведення
+`3feee76`, `33fe391`; увесь код, без `--changed-since`):
 
 ```
-<вивід>
+$ node .claude/skills/integrating-n8n-webhooks/scripts/check-contract.mjs; echo "exit=$?"
+C1   PASS  No test webhook URL (/webhook-test/) in code or .env.example
+C2   PASS  No N8N_* variable with the NEXT_PUBLIC_ prefix
+C3   PASS  N8N_* env vars (except N8N_CALLBACK_SECRET) are read only in lib/n8n/client.ts
+C4   PASS  lib/n8n/client.ts exists for every n8n call and starts with import 'server-only'
+C5   PASS  Every fetch to n8n has a timeout (signal: AbortSignal.timeout(...))
+C6   PASS  Every n8n call sends x-n8n-token, idempotency-key and x-correlation-id
+C7   PASS  Callback route reads the raw body; no .json() / JSON.parse before the signature check
+C8   PASS  Callback signature compared with crypto.timingSafeEqual, never === / !==
+C9   PASS  Callback route checks x-n8n-timestamp and idempotency-key
+C10  PASS  No export const runtime = 'edge'
+C11  PASS  .env.example: contract keys present, secrets are change-me-..., base URL ends in /webhook
+C12  PASS  No request bodies or personal data in console.* of n8n-related files
+C13  PASS  In "use server" files every n8n call runs inside after() — the user never waits for n8n
+Summary: 13 PASS, 0 FAIL
+exit=0
 ```
 
 **Додатково (за бажанням):** матриця колбеків (`send-signed-callback.mjs`): випадок → очікуваний код → отриманий код.
