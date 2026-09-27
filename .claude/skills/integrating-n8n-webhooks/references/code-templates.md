@@ -15,13 +15,13 @@ import { createHash } from "node:crypto";
 export type N8nEvent = "lead-created" | "quote-request";
 
 export type TriggerResult =
-  | { ok: true; status: number; jobId: string | null }
+  | { ok: true; status: number }
   | { ok: false; status: number | null; reason: "misconfigured" | "rejected" | "unavailable" };
 
 const TIMEOUT_MS = 10_000;
 const RETRY_DELAYS_MS = [1_000, 3_000]; // up to 2 retries → 3 attempts
 
-type EnvName = "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BASE_URL";
+type EnvName = "N8N_WEBHOOK_BASE_URL" | "N8N_WEBHOOK_TOKEN" | "APP_BASE_URL" | "N8N_CALLBACK_SECRET";
 
 function serverEnv(name: EnvName) {
   const value = process.env[name];
@@ -33,9 +33,15 @@ export function callbackUrlFor(event: N8nEvent) {
   return `${serverEnv("APP_BASE_URL")}/api/n8n/${event}`;
 }
 
-// Missing configuration is not transient: report it once instead of retrying.
+// Missing configuration is not transient: report it once instead of retrying. A workflow that
+// calls back also needs APP_BASE_URL and N8N_CALLBACK_SECRET — without the secret our callback
+// route would answer 401 and the record would stay "processing" forever.
 function readConfig(withCallback: boolean): { missing: EnvName[] } | { baseUrl: string; token: string } {
-  const names: EnvName[] = ["N8N_WEBHOOK_BASE_URL", "N8N_WEBHOOK_TOKEN", ...(withCallback ? ["APP_BASE_URL" as const] : [])];
+  const names: EnvName[] = [
+    "N8N_WEBHOOK_BASE_URL",
+    "N8N_WEBHOOK_TOKEN",
+    ...(withCallback ? (["APP_BASE_URL", "N8N_CALLBACK_SECRET"] as const) : []),
+  ];
   const missing = names.filter((name) => !process.env[name]);
   if (missing.length) return { missing };
   return { baseUrl: serverEnv("N8N_WEBHOOK_BASE_URL"), token: serverEnv("N8N_WEBHOOK_TOKEN") };
@@ -87,11 +93,11 @@ export async function triggerWorkflow<T extends Record<string, unknown>>(options
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       lastStatus = response.status;
-      const text = await response.text(); // status decides; the text is read only for job_id
+      await response.body?.cancel(); // only the status code counts; the body is never read or parsed
       console.info(
         `[n8n] -> ${event} status=${response.status} attempt=${attempt} ms=${Date.now() - started} bytes=${bytes} sha256=${sha} cid=${correlationId}`,
       );
-      if (response.ok) return { ok: true, status: response.status, jobId: readJobId(text) };
+      if (response.ok) return { ok: true, status: response.status };
       if (response.status < 500) return { ok: false, status: response.status, reason: "rejected" }; // 4xx: fix, don't retry
     } catch (error) {
       const name = error instanceof Error ? error.name : "Error"; // TimeoutError / TypeError — no URL, no token
@@ -100,16 +106,6 @@ export async function triggerWorkflow<T extends Record<string, unknown>>(options
     if (attempt <= RETRY_DELAYS_MS.length) await sleep(RETRY_DELAYS_MS[attempt - 1]);
   }
   return { ok: false, status: lastStatus, reason: "unavailable" };
-}
-
-function readJobId(text: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(text);
-    const id = (parsed as { job_id?: unknown })?.job_id;
-    return typeof id === "string" ? id : null;
-  } catch {
-    return null;
-  }
 }
 ```
 
@@ -230,6 +226,8 @@ function parseCallback(raw: string, event: string): CallbackBody | null {
   const data = body?.data;
   if (body?.version !== 1 || typeof body.event !== "string" || !body.event.startsWith(`${event}.`)) return null;
   if (!data || typeof data.jobId !== "string" || (data.status !== "completed" && data.status !== "failed")) return null;
+  // the handler finds the record by it — a callback without it is malformed (400), not a server error
+  if (typeof data.requestIdempotencyKey !== "string" || !data.requestIdempotencyKey.trim()) return null;
   return body as CallbackBody;
 }
 ```
@@ -243,7 +241,7 @@ import { db } from "@/lib/db";
 export type CallbackData = {
   jobId: string;
   status: "completed" | "failed";
-  requestIdempotencyKey?: string;
+  requestIdempotencyKey: string; // our idempotency-key from the request that started the workflow
   result?: unknown;
   error?: unknown;
 };
@@ -253,7 +251,7 @@ export type CallbackData = {
 export const callbackHandlers: Record<string, (data: CallbackData) => Promise<void>> = {
   "quote-request": async (data) => {
     // Find the record by the idempotency key we sent (known before job_id arrives).
-    const quote = data.requestIdempotencyKey ? await db.getQuoteByIdempotencyKey(data.requestIdempotencyKey) : null;
+    const quote = await db.getQuoteByIdempotencyKey(data.requestIdempotencyKey);
     if (!quote) throw new Error("unknown quote");
 
     const documentUrl = safeHttpUrl((data.result as { documentUrl?: unknown } | undefined)?.documentUrl);
@@ -305,7 +303,8 @@ export async function requestQuote(_prevState: QuoteFormState, formData: FormDat
   // The workflow takes 40–90 s: the user never waits for n8n. n8n answers 202 {job_id}
   // right away and calls /api/n8n/quote-request when the PDF is ready.
   after(async () => {
-    let next: { status: "processing"; jobId: string | null } | { status: "failed" } = { status: "failed" };
+    // n8n's answer counts only by status code; the job id arrives later, in the signed callback.
+    let next: { status: "processing" } | { status: "failed" } = { status: "failed" };
     try {
       const result = await triggerWorkflow({
         event: "quote-request",
@@ -320,7 +319,7 @@ export async function requestQuote(_prevState: QuoteFormState, formData: FormDat
         correlationId: quote.correlationId,
         withCallback: true,
       });
-      if (result.ok) next = { status: "processing", jobId: result.jobId };
+      if (result.ok) next = { status: "processing" };
     } catch (error) {
       // Never leave the quote stuck in "queued": anything unexpected ends as "failed".
       const name = error instanceof Error ? error.name : "Error";

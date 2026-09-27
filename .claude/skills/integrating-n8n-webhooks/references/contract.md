@@ -58,8 +58,9 @@ Component ламає збірку (у Next.js 16 пакет ставити не 
 403 — неправильний токен, 404 — воркфлоу не опубліковано або це тестовий URL. Їх виправляють.
 
 **Відповідь.** Дивимось лише на код статусу. Текст не парсимо: документація для Immediately пише
-«Workflow got started», а n8n повертає `{"message":"Workflow was started"}`. У режимі Respond to
-Webhook тіло — те, що задали в n8n (у нас `{"job_id": …}`).
+«Workflow got started», а n8n повертає `{"message":"Workflow was started"}`. Тіло відповіді не
+читаємо взагалі (`await response.body?.cancel()`), навіть `{"job_id": …}` з Respond to Webhook: запис
+знаходимо за своїм `idempotency-key`, а `jobId` приходить у підписаному колбеку (`data.jobId`).
 
 **Хто викликає.**
 - Дія з UI — Server Action: публічний POST-ендпоінт, автентифікація/права/валідація всередині
