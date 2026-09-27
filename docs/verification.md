@@ -20,7 +20,7 @@
 | Skill | Звідки (Project / Personal / вбудований) | Примітка |
 |---|---|---|
 | `vercel-react-best-practices` | Project (`.claude/skills/vercel-react-best-practices/SKILL.md`) | видно після встановлення; використано для рев'ю в Task A |
-| `building-client-form` | | |
+| `building-client-form` | Project (`.claude/skills/building-client-form/SKILL.md`) | викликаний сам у свіжій сесії (Task B) |
 | `integrating-n8n-webhooks` | | |
 
 - Особисті скіли, які теж видно (`~/.claude/skills/`…), і чи можуть вони вплинути на перевірки:
@@ -157,12 +157,48 @@ TTFB 1.428993s, total 1.429588s
 
 ## Task B — `building-client-form`
 
-- Запит у свіжій сесії (скіл не названо):
-  > <запит>
-- Чи спрацював скіл і як це видно: <виклик `Skill` з `building-client-form` / читання `SKILL.md` / ні>
-- Якщо не з першого разу — що змінили в `description`, і результат другої спроби: <…>
-- Що зроблено (файли): <…>
-- Пункти Verify зі скіла — результат кожного: <…>
+Скіл закомічено в `9986bb8`; код з перевірки лишили й закомітили окремо (`feat(leads)`, див. `git log`) (`name` = тека, `description` 832 символи, `SKILL.md` 125 рядків).
+
+- Запит у свіжій сесії Claude Code (сесія «Форма додавання нотатки на сторінці ліда»; скіл не названо):
+  > На сторінці ліда в дашборді (/dashboard/leads/[id]) додай форму «Додати нотатку»: одне текстове
+  > поле до 500 символів; нотатка дописується до внутрішніх нотаток ліда.
+- Чи спрацював скіл і як це видно: **так, з першої спроби.** У журналі сесії перша дія агента після
+  запиту — `(called Skill)`, далі в контекст завантажено тіло скіла з рядком
+  `Base directory for this skill: …\.claude\skills\building-client-form`. Фінальна відповідь агента:
+  «Зроблено за скілом `building-client-form`».
+- Якщо не з першого разу — що змінили в `description`: нічого, спрацював одразу.
+- Що зроблено (файли):
+  - `lib/db.ts` — `appendLeadNote(id, note)`: дописує рядок до `internalNotes`;
+  - `lib/note-form.ts` — `parseNoteForm`: порожньо / > 500 символів → помилка поля; підмінений
+    `leadId` (не `lead_NNNN`) → загальна помилка без подробиць;
+  - `app/dashboard/actions.ts` — `addLeadNote`: `getCurrentUser()` → валідація → лід належить
+    workspace користувача → запис → аудит в `after()` → `revalidatePath` → `{ status: "ok" }`;
+  - `components/note-form.tsx` — `useActionState`, `action={formAction}`, `label`/`htmlFor`,
+    `aria-invalid`, `aria-describedby`, підсумок у `role="alert"`, `aria-live="polite"`, кнопка
+    «Зберігаємо…» з `disabled={pending}`, `defaultValue` з `state.values` після помилки;
+  - `app/dashboard/leads/[id]/page.tsx` — форма під блоком нотаток.
+
+  Агент також помітив поза задачею, що `updateLeadStatus` і `deleteLead` в `app/actions.ts` не
+  перевіряють сесію (та сама знахідка `server-auth-actions`, що й у рев'ю Task A).
+
+- Пункти Verify зі скіла — результат кожного. Агент у своїй сесії перевірив у браузері порожню
+  відправку, нормальну відправку, чужий лід і журнал; «без JS» і «без сесії» пропустив — їх
+  перевірено окремо на продакшн-збірці (`npm run build && npm start`). Відправка «без JS» — це
+  звичайний `multipart/form-data` POST з тими прихованими полями (`$ACTION_REF_1`, `$ACTION_KEY`,
+  `leadId`…), які сервер рендерить у `<form>`, — так форму надсилає браузер з вимкненим JavaScript:
+
+  | Пункт Verify | Результат |
+  |---|---|
+  | `npm run lint`, `npm run build` | без помилок |
+  | Порожня відправка | 200; у відповіді `role="alert"` «Перевірте поля: Напишіть текст нотатки» і `id="note-text-error"` під полем; `appendLeadNote` не викликався |
+  | Відправка без JavaScript | 200 за 547 мс, сторінка з «Нотатку додано.», нотатка з'явилась у внутрішніх нотатках `lead_0023` |
+  | Дія без сесії (без cookie) | 307 → `/login`, нотатки не додано |
+  | Чужий лід (`leadId=lead_0007`, інший workspace) | 200 з «Не вдалося зберегти нотатку», `appendLeadNote` не викликався |
+  | Журнал сервера | лише `db:…` лічильники: `appendLeadNote: 1` — рівно на одну валідну відправку; тексту нотатки, email, телефону немає |
+  | Повільне після відповіді | `db:insertAuditEntry` (250 мс) з'являється в журналі після `appendLeadNote` і перерендеру — в `after()` |
+
+  Попередження `Missing origin header from a forwarded Server Actions request` у журналі — від
+  `curl`, який не надсилає `Origin`; браузер його надсилає.
 
 ## Task C — `integrating-n8n-webhooks`
 
