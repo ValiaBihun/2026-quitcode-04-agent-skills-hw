@@ -74,7 +74,9 @@
   `lib/db.ts`, `lib/quote-form.ts`, `lib/quotes.ts`, `lib/types.ts`; діф: `docs/ab/a-without-skill.diff`
 - Змінні середовища, які додав агент: `N8N_QUOTE_WEBHOOK_URL`, `APP_URL` (старий `N8N_WEBHOOK_URL` з
   `/webhook-test/` лишився)
-- `check-contract.mjs --root ../leaddesk-ab-a --changed-since base` — лише код прогону:
+- `check-contract.mjs --root ../leaddesk-ab-a --changed-since base` — лише код прогону (вивід
+  перезнято версією скрипта `cf97b0a`: кожен FAIL тепер з рядком; PASS/FAIL ті самі, що й у першому
+  замірі версією `18a7ea0`):
   ```
   check-contract: root=…\leaddesk-ab-a files=39 changed-since=base (11 changed file(s))
   C1   PASS  No test webhook URL (/webhook-test/) in code or .env.example
@@ -222,6 +224,12 @@
   - `33fe391 fix(env): drop the test webhook URL from .env.example` — прибрано
     `N8N_WEBHOOK_URL=…/webhook-test/lead-created`.
   - До скіла: `18a7ea0 fix(skills/n8n): check-contract reads CRLF files` — знахідка прогону B.
+- Після рев'ю CodeRabbit (PR #8) у перенесеному коді B виправлено ще чотири речі, яких ні скіл, ні
+  агент не передбачили: потокове читання тіла колбека з лімітом 64 КБ замість `request.text()`,
+  конфігурація клієнта поза повторами, `try/catch` в `after()` (кошторис не лишається `queued`),
+  збереження введеного й доступні помилки у формі кошторису — коміти `8d599e2`, `e000dfe`; скіл
+  підтягнуто окремо (`cf97b0a`, `e34208f`). Деталі й перевірки — у `docs/verification.md`, розділ
+  «Після рев'ю CodeRabbit».
 - Ключі контракту в `.env.example`: `N8N_WEBHOOK_BASE_URL=http://127.0.0.1:5678/webhook`,
   `N8N_WEBHOOK_TOKEN=change-me-webhook-token`, `N8N_CALLBACK_SECRET=change-me-callback-secret`,
   `APP_BASE_URL=http://127.0.0.1:3000`; `/webhook-test/` немає.
