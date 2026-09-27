@@ -51,10 +51,10 @@ POST-ендпоінт), доступна, працює без JavaScript і ві
      | { status: "idle" }
      | { status: "invalid"; errors: Partial<Record<NoteField, string>>; values: { text: string } }
      | { status: "ok" }
-     | { status: "error" };
+     | { status: "error"; values: { text: string } };
    ```
    Не повертати рядок з бази, `id` сесії, `ipAddress`, `rawPayload`. `values` — лише те, що
-   користувач сам ввів, щоб воно не зникло після помилки.
+   користувач сам ввів, у **кожному** стані помилки (і `invalid`, і `error`), щоб воно не зникло.
 
 **3. Клієнт — `useActionState`**:
    ```tsx
@@ -63,7 +63,11 @@ POST-ендпоінт), доступна, працює без JavaScript і ві
    ```
    - `action={formAction}`, а не `onSubmit` + `fetch`: так форма працює й без JavaScript.
    - Кнопка `type="submit"` з `disabled={pending}` і текстом «Зберігаємо…».
-   - Після помилки введене не зникає: `defaultValue={state.status === "invalid" ? state.values.text : ""}`.
+   - Після помилки введене не зникає. React 19 скидає **неконтрольовані** поля після кожної дії форми
+     (`requestFormReset`), і `defaultValue`, змінений після монтування, цього не відновлює. Тому поля
+     контрольовані: `const [text, setText] = useState(() => state.values?.text ?? "")`,
+     `value={text} onChange={…}`; початкове значення зі стану дії потрібне для відправки без JS.
+     Очистити — лише після `ok` (порівняння попереднього стану під час рендеру, без `useEffect`).
 
 **4. Доступні помилки полів** (одна розмітка на кожне поле):
    ```tsx
@@ -99,7 +103,7 @@ POST-ендпоінт), доступна, працює без JavaScript і ві
 - [ ] 3. Дія повертає лише { status, errors?, values? } — без об'єктів з бази.
 - [ ] 4. Форма — useActionState + action={formAction}; кнопка disabled={pending}.
 - [ ] 5. Кожне поле з помилкою: label/htmlFor, aria-invalid, aria-describedby; підсумок у role="alert".
-- [ ] 6. Введене зберігається після помилки валідації.
+- [ ] 6. Введене зберігається після будь-якої помилки: поля контрольовані, `values` — у кожному стані помилки.
 - [ ] 7. У коді немає console.log з formData, тілом запиту чи персональними даними.
 - [ ] 8. Листи/вебхуки/аудит — в after(); до return лише валідація й основний запис.
 ```
