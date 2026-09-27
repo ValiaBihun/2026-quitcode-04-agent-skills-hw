@@ -385,4 +385,4 @@ Summary: 8/8 as expected
 
 ## Task E3 (бонус) — ті самі скіли в Cursor
 
-Не виконувалось: Cursor у цій роботі не використовували, усі прогони — у Claude Code.
+Не виконувалось: Cursor у цій роботі не використовували, усі прогони — у Claude Code. Бонус Task E зроблено як E1 — `docs/skill-review-n8n.md`.
