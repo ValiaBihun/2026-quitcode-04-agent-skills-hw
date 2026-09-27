@@ -84,14 +84,23 @@ _Заповнюється після рев'ю застосунку зі скі�
 
 ## 6. Закріплення версії й коміт
 
-- Команда встановлення (запускає людина у своєму терміналі, scope **Project**):
-  ```bash
-  DISABLE_TELEMETRY=1 npx skills@1.7.0 add vercel-labs/agent-skills#agent-skills-063bee94c3f4df8453406c830b0a7df0f2860278 \
-    --skill vercel-react-best-practices -a claude-code --copy
+- Команда встановлення (запускала людина у своєму терміналі PowerShell, scope **Project**;
+  `npx.cmd`, бо Execution Policy блокує `npx.ps1`):
+  ```powershell
+  $env:DISABLE_TELEMETRY=1; npx.cmd skills@1.7.0 add vercel-labs/agent-skills#agent-skills-063bee94c3f4df8453406c830b0a7df0f2860278 --skill vercel-react-best-practices -a claude-code --copy
   ```
-- Де лягли файли; справжні файли чи посилання: _після встановлення_ — очікуємо
-  `.claude/skills/vercel-react-best-practices/`, 75 справжніх файлів (`--copy`), без `.agents/`.
-- Що потрапило в git: _після встановлення_ — тека скіла + `skills-lock.json`.
+  Відповідник для Git Bash: `DISABLE_TELEMETRY=1 npx skills@1.7.0 add … --copy`.
+- Де лягли файли; справжні файли чи посилання: `.claude/skills/vercel-react-best-practices/`,
+  75 справжніх файлів (`find … -type f | wc -l`). `dir /AL .claude\skills` не показує ні junction,
+  ні symlink; теки `.agents/` у проєкті немає. `diff -rq` з клоном тега: відрізняється лише
+  відсутній `metadata.json` (CLI його не копіює).
+- Що потрапило в git: тека скіла + `skills-lock.json` (`source: vercel-labs/agent-skills`,
+  `ref: agent-skills-063bee9…`, `computedHash: 6b526d01…`) — коміт `05d7758`.
+- Побічний ефект CLI: разом зі скілом CLI поклав **особистий** скіл `find-skills`
+  (з `vercel-labs/skills`, без тега) у `~/.claude/skills/find-skills/` і записав
+  `~/.agents/.skill-lock.json`. Він не рев'ювався, а його інструкції — шукати й ставити нові скіли.
+  У проєкт він не потрапив; з особистої теки його треба прибрати (інакше він видимий у кожній сесії
+  й «забруднює» прогін A у Task D).
 - Як оновлювати: та сама команда з новим тегом → `git diff .claude/skills/vercel-react-best-practices`
   → рев'ю змін за цим чеклістом (особливо нові не-markdown файли, `allowed-tools`, хуки, `!\``) → коміт.
 
