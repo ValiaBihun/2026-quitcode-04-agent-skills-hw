@@ -11,7 +11,7 @@ export type NoteFormState =
   | { status: "idle" }
   | { status: "invalid"; errors: Partial<Record<NoteField, string>>; values: { text: string } }
   | { status: "ok" }
-  | { status: "error" };
+  | { status: "error"; values: { text: string } };
 
 export async function addLeadNote(
   _prevState: NoteFormState,
@@ -20,15 +20,17 @@ export async function addLeadNote(
   const user = await getCurrentUser();
 
   const parsed = parseNoteForm(formData);
-  if (!parsed) return { status: "error" };
+  // Every failure hands the typed text back, so the form can keep it.
+  const typed = { text: parsed ? (parsed.ok ? parsed.data.text : parsed.values.text) : "" };
+  if (!parsed) return { status: "error", values: typed };
   if (!parsed.ok) return { status: "invalid", errors: parsed.errors, values: parsed.values };
 
   const { leadId, text } = parsed.data;
   const [workspace, lead] = await Promise.all([getWorkspace(user.workspaceSlug), getLead(leadId)]);
-  if (!lead || lead.workspaceId !== workspace.id) return { status: "error" };
+  if (!lead || lead.workspaceId !== workspace.id) return { status: "error", values: typed };
 
   const saved = await db.appendLeadNote(leadId, text);
-  if (!saved) return { status: "error" };
+  if (!saved) return { status: "error", values: typed };
 
   after(async () => {
     await logAudit("lead.note_added", leadId);

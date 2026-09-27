@@ -3,9 +3,14 @@ import type { NewQuote } from "./types";
 
 export type QuoteFormField = "company" | "email" | "description" | "budget";
 
+// What the visitor typed, sent back after a validation error so nothing is lost.
+export type QuoteFormValues = Record<QuoteFormField, string>;
+
+export const EMPTY_QUOTE_VALUES: QuoteFormValues = { company: "", email: "", description: "", budget: "" };
+
 export type QuoteParseResult =
   | { ok: true; data: NewQuote }
-  | { ok: false; errors: Partial<Record<QuoteFormField, string>> };
+  | { ok: false; errors: Partial<Record<QuoteFormField, string>>; values: QuoteFormValues };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -37,5 +42,10 @@ export function parseQuoteForm(formData: FormData): QuoteParseResult {
     }
   }
 
-  return Object.keys(errors).length > 0 ? { ok: false, errors } : { ok: true, data };
+  if (Object.keys(errors).length === 0) return { ok: true, data };
+  return {
+    ok: false,
+    errors,
+    values: { company: data.company, email: data.email, description: data.description, budget },
+  };
 }
