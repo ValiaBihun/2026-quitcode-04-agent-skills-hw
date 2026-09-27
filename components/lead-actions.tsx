@@ -17,8 +17,15 @@ export function LeadActions({ leadId, status }: { leadId: string; status: LeadSt
     setCurrent(next);
     setFailed(null);
     startTransition(async () => {
-      const result = await updateLeadStatus(leadId, next);
-      if (result.status === "ok") return; // the action already revalidates this page
+      // an error result and a rejected call (network, server crash) are handled the same way —
+      // otherwise a rejection would skip the rollback and land in the error boundary
+      let ok = false;
+      try {
+        ok = (await updateLeadStatus(leadId, next)).status === "ok";
+      } catch {
+        ok = false;
+      }
+      if (ok) return; // the action already revalidates this page
       startTransition(() => {
         setCurrent(previous); // roll the optimistic value back
         setFailed("Не вдалося змінити статус. Можливо, лід уже видалено — оновіть сторінку.");
@@ -30,8 +37,13 @@ export function LeadActions({ leadId, status }: { leadId: string; status: LeadSt
     if (!window.confirm("Видалити лід назавжди?")) return;
     setFailed(null);
     startTransition(async () => {
-      const result = await deleteLead(leadId);
-      if (result.status === "ok") {
+      let ok = false;
+      try {
+        ok = (await deleteLead(leadId)).status === "ok";
+      } catch {
+        ok = false;
+      }
+      if (ok) {
         router.push("/dashboard");
         return;
       }
