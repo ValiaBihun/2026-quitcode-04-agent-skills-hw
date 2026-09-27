@@ -244,8 +244,34 @@
   Summary: 13 PASS, 0 FAIL
   exit=0
   ```
-- Сценарій «форма → колбек → `/quotes/<id>`» ще раз, уже на гілці: _заповнюється після оновлення
-  `.env.local` робочого репозиторію_.
+- Сценарій «форма → колбек → `/quotes/<id>`» ще раз, уже на гілці (`npm run build && npm start`,
+  `.env.local` з ключами контракту — значення згенеровані, не друкувались; мок
+  `node --env-file=.env.local tools/mock-n8n.mjs --mode respond-202 --delay 5000`):
+  форма відповіла за **160 мс**, `/quotes/q_cfd2…` — «У черзі», через ≈ 5 с — «Готово. Кошторис
+  готовий» з PDF. Заодно — форма ліда на `/` після доведення `3feee76`: «Дякуємо! Заявку отримано» за
+  **141 мс** (у базовій лінії Task A було 2 430 мс).
+  ```
+  [mock-n8n] 2026-09-27T11:06:16.981Z POST /webhook/quote-request -> 202 in 2 ms auth=ok idempotency=new | headers: accept,accept-language,cache-control,content-type,idempotency-key,pragma,user-agent,x-correlation-id,x-n8n-token | body 303 B sha256=efea4e5d…
+  [mock-n8n] 2026-09-27T11:06:22.198Z callback POST http://127.0.0.1:3000/api/n8n/quote-request -> 202 in 209 ms (try 1/3) event=quote-request.completed body 382 B sha256=aa18eefa…
+  [mock-n8n] 2026-09-27T11:06:46.128Z POST /webhook/lead-created -> 202 in 1 ms auth=ok idempotency=new | headers: accept,accept-language,cache-control,content-type,idempotency-key,pragma,user-agent,x-correlation-id,x-n8n-token | body 319 B sha256=136b3df7…
+  ```
+  Журнал сервера гілки:
+  ```
+  db:insertQuote: 1
+  db:getQuote: 1
+  [n8n] -> quote-request status=202 attempt=1 ms=57 bytes=303 sha256=efea4e5dbdd1e367 cid=449eca2b-68d0-47c6-8cc2-c775d44ee952
+  db:updateQuote: 1
+  db:getQuoteByIdempotencyKey: 1
+  db:updateQuote: 2
+  db:getQuote: 2
+  [n8n] <- quote-request status=202 bytes=382 cid=449eca2b-68d0-47c6-8cc2-c775d44ee952
+  db:insertLead: 1
+  db:insertAuditEntry: 1
+  [n8n] -> lead-created status=202 attempt=1 ms=4 bytes=319 sha256=136b3df7d2b2f685 cid=81a64bbe-c950-4c14-9c62-3a46d2851a7f
+  ```
+  Тіл, email, телефонів, токенів і підписів у журналі немає. Матрицю підписаних колбеків
+  (`send-signed-callback.mjs`, 8/8) агент B прогнав на цьому ж коді у своїй копії; у гілці код колбека
+  не змінювався.
 - Рядок у `docs/n8n-integrations.md`: створив агент B (`quote-request`, власник «уточнити»).
 
 ## Висновок
